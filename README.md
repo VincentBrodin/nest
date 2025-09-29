@@ -8,17 +8,17 @@ It learns where you like your apps to live and makes sure they always end up in 
 ## Philosophy
 
 `nest` follows a few simple principles:
-- Always predictable - You should know where your apps will appear before you even open them.
-- Never intrusive - Nest runs quietly in the background, without stealing focus or slowing you down.
-- Learn, don’t force - It adapts to your habits instead of making you adapt to it.
-- Built for speed - Lightweight, event-driven, and tuned for real workflows.
+- *Always predictable* - You should know where your apps will appear before you even open them.
+- *Never intrusive* - `nest` runs quietly in the background, without stealing focus or slowing you down.
+- *Learn, don’t force* - It adapts to your habits instead of making you adapt to it.
+- *Built for speed* - Lightweight, event-driven, and tuned for real workflows.
 
 ## Features
 
-- Learns your habits - Nest remembers where you usually place apps.
-- Workspace aware - Keep your browser on workspace 2, Discord on workspace 5, and terminal on workspace 1, automatically.
-- Real-time - Reacts to new windows instantly via Hyprland’s IPC stream.
-- Lightweight - Runs in the background without getting in your way.
+- *Learns your habits* - `nest` remembers where you usually place apps.
+- *Workspace aware* - Keep your browser on workspace 2, Discord on workspace 5, and terminal on workspace 1, automatically.
+- *Real-time* - Reacts to new windows instantly via Hyprland’s IPC stream.
+- *Lightweight* - Runs in the background without getting in your way.
 
 ## Getting Started
 
