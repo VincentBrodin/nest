@@ -24,7 +24,7 @@ impl<T, U> Clone for SafeMap<T, U> {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Program {
     pub class: String,
     pub positions: Vec<Position>,
@@ -51,6 +51,15 @@ impl State {
         }
     }
 
+    pub async fn load(programs: Vec<Program>) -> Self {
+        let state = Self::new();
+        let mut programs_map = state.programs.0.lock().await;
+        for program in programs {
+            programs_map.insert(program.class.clone(), program);
+        }
+        state.clone()
+    }
+
     pub async fn add_program(&self, class: String, address: Address) {
         {
             // Creates new program if none exists
@@ -72,6 +81,7 @@ impl State {
         }
         print!("Program of type {} added\n", class)
     }
+
     // Removes mapping between window and program, it will never remove a programs state
     pub async fn remove_window(&self, address: Address) {
         let mut addresses = self.addresses.0.lock().await;
@@ -97,6 +107,11 @@ impl State {
             time: Utc::now().timestamp(),
         };
         state.positions.push(position);
+
+        while state.positions.len() > 30 {
+            state.positions.remove(0);
+        }
+
         self.changed.store(true, Ordering::Relaxed);
         print!(
             "Program of type {} got moved to workspace {}\n",
@@ -104,6 +119,11 @@ impl State {
         );
 
         true
+    }
+
+    pub async fn get_program(&self, class: String) -> Option<Program> {
+        let programs = self.programs.0.lock().await;
+        programs.get(&class).cloned()
     }
 
     pub async fn get_programs(&self) -> Vec<Program> {
