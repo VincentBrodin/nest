@@ -7,8 +7,23 @@ use std::{
 };
 
 use chrono::Utc;
-use hyprland::shared::Address;
+use hyprland::{
+    dispatch::{Dispatch, DispatchType, WindowIdentifier, WorkspaceIdentifierWithSpecial},
+    error::HyprError,
+    shared::Address,
+};
+use thiserror::Error;
 use tokio::sync::Mutex;
+
+#[derive(Error, Debug)]
+pub enum Error {
+    #[error("hyprland error")]
+    HyprError(#[from] HyprError),
+    #[error("address not mapped to a class")]
+    BlankAddress,
+    #[error("class not mapped to a program")]
+    BlankClass,
+}
 
 pub struct SafeMap<T, U>(Arc<Mutex<HashMap<T, U>>>);
 
@@ -28,6 +43,7 @@ impl<T, U> Clone for SafeMap<T, U> {
 pub struct Program {
     pub class: String,
     pub positions: Vec<Position>,
+    pub moved: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -60,7 +76,7 @@ impl State {
         state.clone()
     }
 
-    pub async fn add_program(&self, class: String, address: Address) {
+    pub async fn add_window(&self, class: String, address: Address) {
         {
             // Creates new program if none exists
             let mut programs = self.programs.0.lock().await;
@@ -70,6 +86,7 @@ impl State {
                     Program {
                         class: class.clone(),
                         positions: Vec::new(),
+                        moved: false,
                     },
                 );
             }
@@ -90,26 +107,34 @@ impl State {
         }
     }
 
-    pub async fn window_moved(&self, address: Address, workspace_id: i32) -> bool {
+    pub async fn window_moved(&self, address: Address, workspace_id: i32) -> Result<(), Error> {
         let addresses = self.addresses.0.lock().await;
         let class = match addresses.get(&address) {
             Some(val) => val,
-            None => return false,
+            None => return Err(Error::BlankAddress),
         };
 
         let mut programs = self.programs.0.lock().await;
-        let state = match programs.get_mut(class) {
+        let program = match programs.get_mut(class) {
             Some(val) => val,
-            None => return false,
+            None => return Err(Error::BlankClass),
         };
+
+        // This is true if the program moved a window
+        if program.moved {
+            println!("Internal move found, ignoring results");
+            program.moved = false;
+            return Ok(());
+        }
+
         let position = Position {
             workspace_id: workspace_id,
             time: Utc::now().timestamp(),
         };
-        state.positions.push(position);
+        program.positions.push(position);
 
-        while state.positions.len() > 30 {
-            state.positions.remove(0);
+        while program.positions.len() > 30 {
+            program.positions.remove(0);
         }
 
         self.changed.store(true, Ordering::Relaxed);
@@ -118,7 +143,32 @@ impl State {
             class, workspace_id
         );
 
-        true
+        Ok(())
+    }
+
+    pub async fn move_window(&self, address: &Address, workspace_id: i32) -> Result<(), Error> {
+        let addresses = self.addresses.0.lock().await;
+        let mut programs = self.programs.0.lock().await;
+
+        let class = match addresses.get(address) {
+            Some(val) => val,
+            None => return Err(Error::BlankAddress),
+        };
+
+        let program = match programs.get_mut(class) {
+            Some(val) => val,
+            None => return Err(Error::BlankClass),
+        };
+
+        program.moved = true;
+
+        Dispatch::call_async(DispatchType::MoveToWorkspace(
+            WorkspaceIdentifierWithSpecial::Id(workspace_id),
+            Some(WindowIdentifier::Address(address.clone())),
+        ))
+        .await?;
+
+        Ok(())
     }
 
     pub async fn get_program(&self, class: String) -> Option<Program> {

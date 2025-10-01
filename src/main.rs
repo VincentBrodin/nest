@@ -1,26 +1,15 @@
-use std::{
-    collections::HashMap,
-    fs::{File, OpenOptions, create_dir_all},
-    io::{Read, Seek, SeekFrom, Write},
-    path::PathBuf,
-    sync::atomic::Ordering,
-    time::Duration,
-};
+use std::{collections::HashMap, sync::atomic::Ordering, time::Duration};
 
-use hyprland::{
-    dispatch::{
-        Dispatch,
-        DispatchType::{self},
-        WindowIdentifier, WorkspaceIdentifierWithSpecial,
-    },
-    error::HyprError,
-    event_listener::AsyncEventListener,
-};
+use hyprland::{error::HyprError, event_listener::AsyncEventListener};
 use thiserror::Error;
 use tokio::time::sleep;
 
-use crate::state::{Position, Program, State};
+use crate::{state::State, storage::Storage};
 mod state;
+mod storage;
+
+const APP_NAME: &str = "nest";
+const STORAGE_FILE_NAME: &str = "storage.txt";
 
 #[derive(Error, Debug)]
 enum Error {
@@ -30,28 +19,14 @@ enum Error {
     IO(#[from] std::io::Error),
     #[error("parse error")]
     ParseIntError(#[from] std::num::ParseIntError),
-    #[error("missing config path")]
-    MissingConfig,
+    #[error("storage error")]
+    Storage(#[from] crate::storage::Error),
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Error> {
-    let state_path = match get_state_file_path() {
-        Some(val) => val,
-        None => return Err(Error::MissingConfig),
-    };
-    match state_path.parent() {
-        Some(val) => create_dir_all(val)?,
-        None => (),
-    };
-
-    let mut state_file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .open(state_path)?;
-
-    let state = State::load(load_state(&mut state_file)?).await;
+    let mut storage = Storage::new(APP_NAME, STORAGE_FILE_NAME)?;
+    let state = State::load(storage.read()?).await;
 
     let mut event_listener = AsyncEventListener::new();
 
@@ -60,7 +35,7 @@ async fn main() -> Result<(), Error> {
         let state = add_state.clone();
         Box::pin(async move {
             state
-                .add_program(event.window_class.clone(), event.window_address.clone())
+                .add_window(event.window_class.clone(), event.window_address.clone())
                 .await;
             let program = match state.get_program(event.window_class).await {
                 Some(val) => val,
@@ -80,11 +55,9 @@ async fn main() -> Result<(), Error> {
                 None => return,
             };
 
-            match Dispatch::call_async(DispatchType::MoveToWorkspace(
-                WorkspaceIdentifierWithSpecial::Id(*workspace_id),
-                Some(WindowIdentifier::Address(event.window_address.clone())),
-            ))
-            .await
+            match state
+                .move_window(&event.window_address, *workspace_id)
+                .await
             {
                 Ok(()) => print!(
                     "Moved window {} to {}\n",
@@ -105,9 +78,13 @@ async fn main() -> Result<(), Error> {
     event_listener.add_window_moved_handler(move |event| {
         let state = move_state.clone();
         Box::pin(async move {
-            state
+            match state
                 .window_moved(event.window_address, event.workspace_id)
-                .await;
+                .await
+            {
+                Ok(_) => (),
+                Err(err) => print!("Failed to move window: {}\n", err),
+            }
         })
     });
 
@@ -120,7 +97,7 @@ async fn main() -> Result<(), Error> {
                 for program in programs.iter() {
                     print!("{}:{:?}\n", program.class, program.positions)
                 }
-                match write_state(&mut state_file, &programs) {
+                match storage.write(&programs) {
                     Ok(()) => state.changed.store(false, Ordering::Relaxed),
                     Err(err) => print!("Failed to write changes: {}\n", err),
                 }
@@ -128,81 +105,10 @@ async fn main() -> Result<(), Error> {
                 print!("No changes found in the state\n");
             }
 
-            sleep(Duration::from_secs(5)).await;
+            sleep(Duration::from_secs(10)).await;
         }
     });
 
     event_listener.start_listener_async().await?;
     Ok(())
-}
-
-fn load_state(file: &mut File) -> Result<Vec<Program>, Error> {
-    let mut buf = String::new();
-    file.read_to_string(&mut buf)?;
-    file.seek(std::io::SeekFrom::Start(0))?;
-
-    let mut programs: Vec<Program> = Vec::new();
-
-    let lines = buf.lines();
-    for line in lines {
-        let split: Vec<&str> = line.split(':').collect();
-        let class = split[0];
-        let mut program = Program {
-            class: class.to_string(),
-            positions: Vec::new(),
-        };
-        let list_values: Vec<&str> = split[1]
-            .trim()
-            .trim_matches(&['[', ']'])
-            .split(',')
-            .collect();
-        for values in list_values {
-            if values.len() == 0 {
-                continue;
-            }
-            let split: Vec<&str> = values.split(';').collect();
-            let workspace_id: i32 = split[0].parse()?;
-            let time: i64 = split[1].parse()?;
-            program.positions.push(Position {
-                workspace_id: workspace_id,
-                time: time,
-            });
-            // print!("{}:{:?}\n", class, program);
-        }
-        programs.push(program);
-    }
-
-    Ok(programs)
-}
-
-fn write_state(file: &mut File, programs: &Vec<Program>) -> Result<(), Error> {
-    file.set_len(0)?;
-    file.seek(SeekFrom::Start(0))?;
-    let mut content = String::new();
-    for program in programs {
-        content.push_str(&format!("{}:[", program.class));
-        for (i, position) in program.positions.iter().enumerate() {
-            if i == program.positions.len() - 1 {
-                content.push_str(&format!(
-                    "{};{}",
-                    position.workspace_id, position.time as i32
-                ));
-            } else {
-                content.push_str(&format!(
-                    "{};{},",
-                    position.workspace_id, position.time as i32
-                ));
-            }
-        }
-        content.push_str("]\n");
-    }
-    file.write_all(content.as_bytes())?;
-    file.flush()?;
-    Ok(())
-}
-
-fn get_state_file_path() -> Option<PathBuf> {
-    let config_dir = dirs::config_dir()?;
-    let app_dir = config_dir.join("nest");
-    Some(app_dir.join("state.txt"))
 }
