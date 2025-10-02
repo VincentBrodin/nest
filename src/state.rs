@@ -49,7 +49,7 @@ pub struct Program {
 #[derive(Clone, Debug)]
 pub struct Position {
     pub workspace_id: i32,
-    pub time: i64,
+    pub timestamp: i64,
 }
 
 pub struct State {
@@ -129,7 +129,7 @@ impl State {
 
         let position = Position {
             workspace_id: workspace_id,
-            time: Utc::now().timestamp(),
+            timestamp: Utc::now().timestamp(),
         };
         program.positions.push(position);
 

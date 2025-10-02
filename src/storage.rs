@@ -84,9 +84,12 @@ impl Storage {
             content.push_str(&format!("{}:[", program.class));
             for (i, position) in program.positions.iter().enumerate() {
                 if i == program.positions.len() - 1 {
-                    content.push_str(&format!("{};{}", position.workspace_id, position.time));
+                    content.push_str(&format!("{};{}", position.workspace_id, position.timestamp));
                 } else {
-                    content.push_str(&format!("{};{},", position.workspace_id, position.time));
+                    content.push_str(&format!(
+                        "{};{},",
+                        position.workspace_id, position.timestamp
+                    ));
                 }
             }
             content.push_str("]\n");
@@ -112,6 +115,6 @@ fn str_to_position(value: &str) -> Option<Position> {
     };
     Some(Position {
         workspace_id: workspace_id,
-        time: time,
+        timestamp: time,
     })
 }

@@ -1,5 +1,6 @@
-use std::{collections::HashMap, sync::atomic::Ordering, time::Duration};
+use std::{cmp, collections::HashMap, f64, sync::atomic, time::Duration};
 
+use chrono::Utc;
 use hyprland::{error::HyprError, event_listener::AsyncEventListener};
 use thiserror::Error;
 use tokio::time::sleep;
@@ -10,6 +11,8 @@ mod storage;
 
 const APP_NAME: &str = "nest";
 const STORAGE_FILE_NAME: &str = "storage.txt";
+const TAU: f64 = 3600.0;
+const SAVE_FREQUENCY: u64 = 10;
 
 #[derive(Error, Debug)]
 enum Error {
@@ -41,16 +44,29 @@ async fn main() -> Result<(), Error> {
                 Some(val) => val,
                 None => return,
             };
-            let mut freq_map: HashMap<i32, i32> = HashMap::new();
+            let mut score_map: HashMap<i32, f64> = HashMap::new();
+            let now = Utc::now().timestamp();
 
             for position in program.positions {
-                match freq_map.get(&position.workspace_id) {
-                    Some(val) => freq_map.insert(position.workspace_id, *val + 1),
-                    None => freq_map.insert(position.workspace_id, 1),
+                // Aging function score = e^(-age / τ)
+                let age = (now - position.timestamp) as f64;
+                let score = f64::powf(f64::consts::E, -age / TAU);
+                print!("Got score of {}\n", score);
+                match score_map.get(&position.workspace_id) {
+                    Some(val) => score_map.insert(position.workspace_id, *val + score),
+                    None => score_map.insert(position.workspace_id, score),
                 };
             }
 
-            let (workspace_id, _) = match freq_map.iter().max_by_key(|&(_, count)| count) {
+            let (workspace_id, score) = match score_map.iter().max_by(|a, b| {
+                if a.1 > b.1 {
+                    cmp::Ordering::Greater
+                } else if a.1 < b.1 {
+                    cmp::Ordering::Less
+                } else {
+                    cmp::Ordering::Equal
+                }
+            }) {
                 Some(val) => val,
                 None => return,
             };
@@ -60,8 +76,8 @@ async fn main() -> Result<(), Error> {
                 .await
             {
                 Ok(()) => print!(
-                    "Moved window {} to {}\n",
-                    event.window_address, workspace_id
+                    "Moved window {} to {} with score {}\n",
+                    event.window_address, workspace_id, score
                 ),
                 Err(err) => print!("Failed to dispatch window move: {}\n", err),
             };
@@ -92,20 +108,20 @@ async fn main() -> Result<(), Error> {
     tokio::spawn(async move {
         let state = runtime_state.clone();
         loop {
-            if state.changed.load(Ordering::Relaxed) {
+            if state.changed.load(atomic::Ordering::Relaxed) {
                 let programs = state.get_programs().await;
                 for program in programs.iter() {
                     print!("{}:{:?}\n", program.class, program.positions)
                 }
                 match storage.write(&programs) {
-                    Ok(()) => state.changed.store(false, Ordering::Relaxed),
+                    Ok(()) => state.changed.store(false, atomic::Ordering::Relaxed),
                     Err(err) => print!("Failed to write changes: {}\n", err),
                 }
             } else {
                 print!("No changes found in the state\n");
             }
 
-            sleep(Duration::from_secs(10)).await;
+            sleep(Duration::from_secs(SAVE_FREQUENCY)).await;
         }
     });
 
