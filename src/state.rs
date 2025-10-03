@@ -12,6 +12,7 @@ use hyprland::{
     error::HyprError,
     shared::Address,
 };
+use log::{debug, info};
 use thiserror::Error;
 use tokio::sync::Mutex;
 
@@ -55,20 +56,22 @@ pub struct Position {
 pub struct State {
     addresses: SafeMap<Address, String>,
     programs: SafeMap<String, Program>,
+    buffer: usize,
     pub changed: Arc<AtomicBool>,
 }
 
 impl State {
-    pub fn new() -> Self {
+    pub fn new(buffer: usize) -> Self {
         Self {
             addresses: SafeMap::new(),
             programs: SafeMap::new(),
+            buffer: buffer,
             changed: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    pub async fn load(programs: Vec<Program>) -> Self {
-        let state = Self::new();
+    pub async fn load(programs: Vec<Program>, buffer: usize) -> Self {
+        let state = Self::new(buffer);
         let mut programs_map = state.programs.0.lock().await;
         for program in programs {
             programs_map.insert(program.class.clone(), program);
@@ -96,14 +99,14 @@ impl State {
             let mut addresses = self.addresses.0.lock().await;
             addresses.insert(address, class.clone());
         }
-        print!("Program of type {} added\n", class)
+        debug!("Program of type {class} added")
     }
 
     // Removes mapping between window and program, it will never remove a programs state
     pub async fn remove_window(&self, address: Address) {
         let mut addresses = self.addresses.0.lock().await;
         if let Some(class) = addresses.remove(&address) {
-            print!("Program of type {} removed\n", class)
+            debug!("Program of type {class} removed")
         }
     }
 
@@ -111,18 +114,22 @@ impl State {
         let addresses = self.addresses.0.lock().await;
         let class = match addresses.get(&address) {
             Some(val) => val,
-            None => return Err(Error::BlankAddress),
+            None => {
+                return Err(Error::BlankAddress);
+            }
         };
 
         let mut programs = self.programs.0.lock().await;
         let program = match programs.get_mut(class) {
             Some(val) => val,
-            None => return Err(Error::BlankClass),
+            None => {
+                return Err(Error::BlankClass);
+            }
         };
 
         // This is true if the program moved a window
         if program.moved {
-            println!("Internal move found, ignoring results");
+            debug!("Internal move, ignoring results");
             program.moved = false;
             return Ok(());
         }
@@ -133,20 +140,17 @@ impl State {
         };
         program.positions.push(position);
 
-        while program.positions.len() > 30 {
+        while program.positions.len() > self.buffer {
             program.positions.remove(0);
         }
 
         self.changed.store(true, Ordering::Relaxed);
-        print!(
-            "Program of type {} got moved to workspace {}\n",
-            class, workspace_id
-        );
+        info!("Program of type {class} got moved to workspace {workspace_id}");
 
         Ok(())
     }
 
-    pub async fn move_window(&self, address: &Address, workspace_id: i32) -> Result<(), Error> {
+    pub async fn move_window(&self, address: &Address, workspace_id: i32) -> Result<bool, Error> {
         let addresses = self.addresses.0.lock().await;
         let mut programs = self.programs.0.lock().await;
 
@@ -162,13 +166,19 @@ impl State {
 
         program.moved = true;
 
-        Dispatch::call_async(DispatchType::MoveToWorkspace(
+        match Dispatch::call_async(DispatchType::MoveToWorkspace(
             WorkspaceIdentifierWithSpecial::Id(workspace_id),
             Some(WindowIdentifier::Address(address.clone())),
         ))
-        .await?;
-
-        Ok(())
+        .await
+        {
+            Ok(_) => Ok(true),
+            Err(_) => {
+                // We failed to move the window (this does not mean an error the window could be in the right position already)
+                program.moved = false;
+                Ok(false)
+            }
+        }
     }
 
     pub async fn get_program(&self, class: String) -> Option<Program> {
@@ -178,12 +188,12 @@ impl State {
 
     pub async fn get_programs(&self) -> Vec<Program> {
         let programs = self.programs.0.lock().await;
-        let v: Vec<Program> = programs
+        let val: Vec<Program> = programs
             .clone()
             .into_iter()
             .map(|val| val.1.clone())
             .collect();
-        v
+        val
     }
 }
 
@@ -193,6 +203,7 @@ impl Clone for State {
             addresses: self.addresses.clone(),
             programs: self.programs.clone(),
             changed: self.changed.clone(),
+            buffer: self.buffer,
         }
     }
 }

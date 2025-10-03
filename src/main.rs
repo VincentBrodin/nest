@@ -1,18 +1,21 @@
-use std::{cmp, collections::HashMap, f64, sync::atomic, time::Duration};
+use std::{cmp, collections::HashMap, f64, str::FromStr, sync::atomic, time::Duration};
 
 use chrono::Utc;
 use hyprland::{error::HyprError, event_listener::AsyncEventListener};
+use log::{LevelFilter, debug, error, info};
 use thiserror::Error;
 use tokio::time::sleep;
 
-use crate::{state::State, storage::Storage};
+use crate::{config::Config, logger::setup_logger, state::State, storage::Storage};
+mod config;
+mod logger;
 mod state;
 mod storage;
 
 const APP_NAME: &str = "nest";
 const STORAGE_FILE_NAME: &str = "storage.txt";
-const TAU: f64 = 3600.0;
-const SAVE_FREQUENCY: u64 = 10;
+const CONFIG_FILE_NAME: &str = "config.toml";
+const LOG_FILE_NAME: &str = "output.txt";
 
 #[derive(Error, Debug)]
 enum Error {
@@ -24,12 +27,27 @@ enum Error {
     ParseIntError(#[from] std::num::ParseIntError),
     #[error("storage error")]
     Storage(#[from] crate::storage::Error),
+    #[error("config error")]
+    Config(#[from] crate::config::Error),
+    #[error("logger error")]
+    Logger(#[from] crate::logger::Error),
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Error> {
+    let config = Config::new(APP_NAME, CONFIG_FILE_NAME)?;
+
+    let log_level = match LevelFilter::from_str(&config.log_level) {
+        Ok(val) => val,
+        Err(err) => {
+            print!("Failed to set log level: {}\n", err,);
+            LevelFilter::Error
+        }
+    };
+    setup_logger(APP_NAME, LOG_FILE_NAME, log_level)?;
+
     let mut storage = Storage::new(APP_NAME, STORAGE_FILE_NAME)?;
-    let state = State::load(storage.read()?).await;
+    let state = State::load(storage.read()?, config.buffer).await;
 
     let mut event_listener = AsyncEventListener::new();
 
@@ -50,8 +68,8 @@ async fn main() -> Result<(), Error> {
             for position in program.positions {
                 // Aging function score = e^(-age / τ)
                 let age = (now - position.timestamp) as f64;
-                let score = f64::powf(f64::consts::E, -age / TAU);
-                print!("Got score of {}\n", score);
+                let score = f64::powf(f64::consts::E, -age / config.tau);
+                debug!("Position got a score of {score}");
                 match score_map.get(&position.workspace_id) {
                     Some(val) => score_map.insert(position.workspace_id, *val + score),
                     None => score_map.insert(position.workspace_id, score),
@@ -75,11 +93,20 @@ async fn main() -> Result<(), Error> {
                 .move_window(&event.window_address, *workspace_id)
                 .await
             {
-                Ok(()) => print!(
-                    "Moved window {} to {} with score {}\n",
-                    event.window_address, workspace_id, score
-                ),
-                Err(err) => print!("Failed to dispatch window move: {}\n", err),
+                Ok(moved) => {
+                    if moved {
+                        info!(
+                            "Moved window {} to {} with score {}",
+                            event.window_address, workspace_id, score
+                        )
+                    } else {
+                        info!(
+                            "Tried to move window {} to {} with score {} but a move could not be completed",
+                            event.window_address, workspace_id, score
+                        )
+                    }
+                }
+                Err(err) => error!("Failed to dispatch window move: {err}"),
             };
         })
     });
@@ -99,7 +126,7 @@ async fn main() -> Result<(), Error> {
                 .await
             {
                 Ok(_) => (),
-                Err(err) => print!("Failed to move window: {}\n", err),
+                Err(err) => print!("Failed react to window move: {}\n", err),
             }
         })
     });
@@ -110,18 +137,18 @@ async fn main() -> Result<(), Error> {
         loop {
             if state.changed.load(atomic::Ordering::Relaxed) {
                 let programs = state.get_programs().await;
-                for program in programs.iter() {
-                    print!("{}:{:?}\n", program.class, program.positions)
-                }
                 match storage.write(&programs) {
-                    Ok(()) => state.changed.store(false, atomic::Ordering::Relaxed),
-                    Err(err) => print!("Failed to write changes: {}\n", err),
+                    Ok(()) => {
+                        info!("State saved to storage");
+                        state.changed.store(false, atomic::Ordering::Relaxed)
+                    }
+                    Err(err) => error!("Failed to write changes: {err}"),
                 }
             } else {
-                print!("No changes found in the state\n");
+                debug!("No changes found in the state");
             }
 
-            sleep(Duration::from_secs(SAVE_FREQUENCY)).await;
+            sleep(Duration::from_secs(config.save_frequency)).await;
         }
     });
 
