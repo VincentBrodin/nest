@@ -17,6 +17,11 @@ Kind of like [zoxide](https://github.com/ajeetdsouza/zoxide), but for window swi
 
 ##  Installation
 
+### Cargo
+```bash
+cargo install hypr-nest
+```
+
 ### From Source
 
 ```bash
