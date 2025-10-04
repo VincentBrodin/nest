@@ -47,24 +47,33 @@ async fn main() -> Result<(), Error> {
     setup_logger(APP_NAME, LOG_FILE_NAME, log_level)?;
 
     let mut storage = Storage::new(APP_NAME, STORAGE_FILE_NAME)?;
-    let state = State::load(storage.read()?, config.buffer).await;
+    let state = State::load(storage.read()?, config.buffer, config.ignore.into()).await;
 
     let mut event_listener = AsyncEventListener::new();
+
+    let workspace_state = state.clone();
+    event_listener.add_workspace_changed_handler(move |event| {
+        let state = workspace_state.clone();
+        Box::pin(async move {
+            state.workspace_changed(event.id);
+        })
+    });
 
     let add_state = state.clone();
     event_listener.add_window_opened_handler(move |event| {
         let state = add_state.clone();
         Box::pin(async move {
-            state
+            if !state
                 .add_window(event.window_class.clone(), event.window_address.clone())
-                .await;
+                .await {
+                return;
+            }
             let program = match state.get_program(event.window_class).await {
                 Some(val) => val,
                 None => return,
             };
             let mut score_map: HashMap<i32, f64> = HashMap::new();
             let now = Utc::now().timestamp();
-
             for position in program.positions {
                 // Aging function score = e^(-age / τ)
                 let age = (now - position.timestamp) as f64;

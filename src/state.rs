@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicI32, Ordering},
     },
 };
 
@@ -57,21 +57,25 @@ pub struct State {
     addresses: SafeMap<Address, String>,
     programs: SafeMap<String, Program>,
     buffer: usize,
+    workspace: Arc<AtomicI32>,
+    ignore: Arc<[String]>,
     pub changed: Arc<AtomicBool>,
 }
 
 impl State {
-    pub fn new(buffer: usize) -> Self {
+    pub fn new(buffer: usize, ignore: Arc<[String]>) -> Self {
         Self {
             addresses: SafeMap::new(),
             programs: SafeMap::new(),
             buffer: buffer,
+            ignore: ignore,
+            workspace: Arc::new(AtomicI32::new(1)),
             changed: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    pub async fn load(programs: Vec<Program>, buffer: usize) -> Self {
-        let state = Self::new(buffer);
+    pub async fn load(programs: Vec<Program>, buffer: usize, ignore: Arc<[String]>) -> Self {
+        let state = Self::new(buffer, ignore);
         let mut programs_map = state.programs.0.lock().await;
         for program in programs {
             programs_map.insert(program.class.clone(), program);
@@ -79,16 +83,26 @@ impl State {
         state.clone()
     }
 
-    pub async fn add_window(&self, class: String, address: Address) {
+    pub async fn add_window(&self, class: String, address: Address) -> bool {
         {
             // Creates new program if none exists
+            if self.ignore.contains(&class) {
+                debug!("{class} is in the ignore list");
+                return false;
+            }
             let mut programs = self.programs.0.lock().await;
             if !programs.contains_key(&class) {
+                let mut positions: Vec<Position> = Vec::new();
+                // If this is the first time we are opening a window we should store that
+                positions.push(Position {
+                    workspace_id: self.workspace.load(Ordering::Relaxed),
+                    timestamp: Utc::now().timestamp(),
+                });
                 let _ = programs.insert(
                     class.clone(),
                     Program {
                         class: class.clone(),
-                        positions: Vec::new(),
+                        positions: positions,
                         moved: false,
                     },
                 );
@@ -99,7 +113,9 @@ impl State {
             let mut addresses = self.addresses.0.lock().await;
             addresses.insert(address, class.clone());
         }
-        debug!("Program of type {class} added")
+        debug!("Program of type {class} added");
+
+        true
     }
 
     // Removes mapping between window and program, it will never remove a programs state
@@ -195,6 +211,10 @@ impl State {
             .collect();
         val
     }
+
+    pub fn workspace_changed(&self, id: i32) {
+        self.workspace.store(id, Ordering::Relaxed);
+    }
 }
 
 impl Clone for State {
@@ -203,6 +223,8 @@ impl Clone for State {
             addresses: self.addresses.clone(),
             programs: self.programs.clone(),
             changed: self.changed.clone(),
+            ignore: self.ignore.clone(),
+            workspace: self.workspace.clone(),
             buffer: self.buffer,
         }
     }
