@@ -4,7 +4,7 @@
 
 nest is an automatic window switcher for [Hyprland](https://github.com/hyprwm/Hyprland).  
 It learns where you like your apps to live and ensures they always end up in the right workspace, no hunting, no moving, no friction.
-
+Kind of like [zoxide](https://github.com/ajeetdsouza/zoxide), but for window switching.
 ## Features
 
 - **Learns your habits** – remembers where you usually place apps.
@@ -47,5 +47,6 @@ Example `config.toml`:
 tau = 3600.0  # Decay constant for learning: e^(-age/tau), where age is in seconds (default = 1h)  
 buffer = 30  # Number of records to keep per program class  
 save_frequency = 10  # Seconds between saves (no save if no changes)  
-log_level = "INFO"  # OFF, ERROR, WARN, INFO, DEBUG, TRACE`
+log_level = "INFO"  # OFF, ERROR, WARN, INFO, DEBUG, TRACE
+ignore = []  # List of program classes to ignore (see storage.txt for the classes that are being tracked)
 ```
