@@ -1,12 +1,13 @@
 [package]
-name = "nest"
 version = "0.0.3"
+name = "nest"
+description = "An automatic window switcher for Hyprland"
 edition = "2024"
 authors = ["Vincent Brodin <vincent.brodin21@gmail.com>"]
 license = "MIT"
 repository = "https://github.com/VincentBrodin/nest"
 readme = "README.md"
-description = "An automatic window switcher for Hyprland"
+keywords = ["hyprland", "tool", "utility"]
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
