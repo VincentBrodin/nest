@@ -34,6 +34,12 @@ cargo build --release
 
 Add this line to your Hyprland config:
 
+### Cargo
+```conf
+exec-once = nest
+```
+
+### From Source
 ```conf
 exec-once = /PATH/TO/nest/target/release/nest
 ```
