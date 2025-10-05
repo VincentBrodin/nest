@@ -1,4 +1,4 @@
-# contributing
+# Contributing
 
 Thanks for your interest in improving nest.
 Here’s how how you can set it up for development.
