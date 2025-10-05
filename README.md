@@ -17,6 +17,11 @@ Kind of like [zoxide](https://github.com/ajeetdsouza/zoxide), but for window swi
 
 ##  Installation
 
+### Cargo
+```bash
+cargo install hypr-nest
+```
+
 ### From Source
 
 ```bash
@@ -29,6 +34,12 @@ cargo build --release
 
 Add this line to your Hyprland config:
 
+### Cargo
+```conf
+exec-once = nest
+```
+
+### From Source
 ```conf
 exec-once = /PATH/TO/nest/target/release/nest
 ```

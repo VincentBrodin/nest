@@ -231,6 +231,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5419bdc4f6a9207fbeba6d11b604d481addf78ecd10c11ad51e76c2f6482748d"
 
 [[package]]
+name = "hypr-nest"
+version = "0.0.4"
+dependencies = [
+ "chrono",
+ "dirs",
+ "fern",
+ "hyprland",
+ "log",
+ "serde",
+ "thiserror",
+ "tokio",
+ "toml",
+]
+
+[[package]]
 name = "hyprland"
 version = "0.4.0-beta.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -376,21 +391,6 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys",
-]
-
-[[package]]
-name = "nest"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "dirs",
- "fern",
- "hyprland",
- "log",
- "serde",
- "thiserror",
- "tokio",
- "toml",
 ]
 
 [[package]]
