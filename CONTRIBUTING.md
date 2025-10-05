@@ -10,15 +10,19 @@ Clone the repository:
 ```bash
 git clone https://github.com/VincentBrodin/nest.git
 cd nest
-Before starting, stop any running instances:
 ```
+
+Before starting, stop any running instances:
+
 ```bash
 killall nest
 ```
+
 In your `~/.config/nest/config.toml`, set the log level to TRACE for detailed output:
 ```toml
 log_level = "TRACE"
 ```
+
 ## Build and run
 **Build in debug mode**:
 ```bash
