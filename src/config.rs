@@ -24,7 +24,7 @@ pub struct Config {
     pub tau: f64,
     pub buffer: usize,
     pub save_frequency: u64,
-    pub tracking_requency: u64,
+    pub tracking_frequency: u64,
     pub log_level: String,
     pub ignore: Vec<String>,
 }
@@ -61,7 +61,7 @@ impl Default for Config {
             tau: 3600.0,
             buffer: 30,
             save_frequency: 10,
-            tracking_requency: 5,
+            tracking_frequency: 5,
             ignore: Vec::new(),
             log_level: log::LevelFilter::Info.as_str().to_string(),
         }

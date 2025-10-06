@@ -192,7 +192,7 @@ async fn main() -> Result<(), Error> {
                     }
                 }
             }
-            sleep(Duration::from_secs(config.tracking_requency)).await;
+            sleep(Duration::from_secs(config.tracking_frequency)).await;
         }
     });
 
