@@ -1,12 +1,19 @@
 use std::{cmp, collections::HashMap, f64, str::FromStr, sync::atomic, time::Duration};
 
 use chrono::Utc;
-use hyprland::{error::HyprError, event_listener::AsyncEventListener};
+use hyprland::{
+    data::Clients, error::HyprError, event_listener::AsyncEventListener, shared::HyprData,
+};
 use log::{LevelFilter, debug, error, info};
 use thiserror::Error;
 use tokio::time::sleep;
 
-use crate::{config::Config, logger::setup_logger, state::State, storage::Storage};
+use crate::{
+    config::Config,
+    logger::setup_logger,
+    state::{State, Window},
+    storage::Storage,
+};
 mod config;
 mod logger;
 mod state;
@@ -44,6 +51,7 @@ async fn main() -> Result<(), Error> {
             LevelFilter::Error
         }
     };
+
     setup_logger(APP_NAME, LOG_FILE_NAME, log_level)?;
 
     let mut storage = Storage::new(APP_NAME, STORAGE_FILE_NAME)?;
@@ -74,7 +82,7 @@ async fn main() -> Result<(), Error> {
             };
             let mut score_map: HashMap<i32, f64> = HashMap::new();
             let now = Utc::now().timestamp();
-            for position in program.positions {
+            for position in program.workspaces {
                 // Aging function score = e^(-age / τ)
                 let age = (now - position.timestamp) as f64;
                 let score = f64::powf(f64::consts::E, -age / config.tau);
@@ -138,6 +146,92 @@ async fn main() -> Result<(), Error> {
                 Err(err) => print!("Failed react to window move: {}\n", err),
             }
         })
+    });
+
+    let window_state = state.clone();
+    tokio::spawn(async move {
+        let state = window_state.clone();
+        loop {
+            let clients = match Clients::get_async().await {
+                Ok(val) => val,
+                Err(err) => {
+                    error!("Failed to fetch clients: {err}");
+                    continue;
+                }
+            };
+            let programs = state.get_mapped_programs().await;
+            let now = Utc::now().timestamp();
+            for client in clients {
+                let program = match programs.get(&client.class) {
+                    Some(val) => val,
+                    None => continue,
+                };
+
+                let window = match program.windows.last() {
+                    Some(last_window) => {
+                        if client.floating != last_window.floating && !client.floating {
+                            info!(
+                                "Floating window of type {} got toggeled to not float",
+                                client.class
+                            );
+                            Some(Window {
+                                at: (0, 0),
+                                size: (0, 0),
+                                floating: false,
+                                timestamp: now,
+                            })
+                        } else if (client.at != last_window.at || client.size != last_window.size)
+                            && client.floating
+                        {
+                            info!(
+                                "Floating window of type {} got moved from {:?} -> {:?} or resized from {:?} -> {:?}",
+                                client.class,
+                                last_window.at,
+                                client.at,
+                                last_window.size,
+                                client.size,
+                            );
+                            Some(Window {
+                                at: client.at,
+                                size: client.size,
+                                floating: client.floating,
+                                timestamp: now,
+                            })
+                        } else {
+                            None
+                        }
+                    }
+                    None => {
+                        if client.floating {
+                            Some(Window {
+                                at: client.at,
+                                size: client.size,
+                                floating: true,
+                                timestamp: now,
+                            })
+                        } else {
+                            Some(Window {
+                                at: (0, 0),
+                                size: (0, 0),
+                                floating: false,
+                                timestamp: now,
+                            })
+                        }
+                    }
+                };
+
+                match window {
+                    Some(window) => {
+                        match state.floating_window_changed(&client.class, window).await {
+                            Ok(()) => (),
+                            Err(err) => error!("Failed to react to floating window changed: {err}"),
+                        }
+                    }
+                    None => (),
+                }
+            }
+            sleep(Duration::from_secs(5)).await;
+        }
     });
 
     let runtime_state = state.clone();

@@ -1,5 +1,7 @@
 use std::{
     collections::HashMap,
+    num::ParseIntError,
+    str::{FromStr, ParseBoolError},
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicI32, Ordering},
@@ -8,7 +10,9 @@ use std::{
 
 use chrono::Utc;
 use hyprland::{
-    dispatch::{Dispatch, DispatchType, WindowIdentifier, WorkspaceIdentifierWithSpecial},
+    dispatch::{
+        Dispatch, DispatchType, Position, WindowIdentifier, WorkspaceIdentifierWithSpecial,
+    },
     error::HyprError,
     shared::Address,
 };
@@ -24,6 +28,16 @@ pub enum Error {
     BlankAddress,
     #[error("class not mapped to a program")]
     BlankClass,
+}
+
+#[derive(Error, Debug)]
+pub enum ParseError {
+    #[error("invalid format found")]
+    InvalidFormat,
+    #[error("could parse int")]
+    InvalidInt(#[from] ParseIntError),
+    #[error("could parse bool")]
+    InvalidBool(#[from] ParseBoolError),
 }
 
 pub struct SafeMap<T, U>(Arc<Mutex<HashMap<T, U>>>);
@@ -43,14 +57,165 @@ impl<T, U> Clone for SafeMap<T, U> {
 #[derive(Clone, Debug)]
 pub struct Program {
     pub class: String,
-    pub positions: Vec<Position>,
+    pub workspaces: Vec<Workspace>,
+    pub windows: Vec<Window>,
     pub moved: bool,
 }
 
+impl ToString for Program {
+    fn to_string(&self) -> String {
+        let mut buf = String::new();
+        buf.push_str(&format!("{}:[", self.class));
+        for (i, workspace) in self.workspaces.iter().enumerate() {
+            buf.push_str(&workspace.to_string());
+            if i != self.workspaces.len() - 1 {
+                buf.push(',');
+            }
+        }
+        buf.push_str("]&[");
+        for (i, window) in self.windows.iter().enumerate() {
+            buf.push_str(&window.to_string());
+            if i != self.windows.len() - 1 {
+                buf.push(',');
+            }
+        }
+        buf.push(']');
+        buf
+    }
+}
+
+impl FromStr for Program {
+    type Err = ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let split: Vec<&str> = s.split(':').collect();
+        let class = split.first().unwrap_or(&"0");
+        let data: Vec<&str> = split.last().unwrap_or(&"0").split('&').collect();
+
+        let workspaces_str: Vec<&str> = data
+            .first()
+            .unwrap_or(&"0")
+            .trim()
+            .trim_matches(&['[', ']'])
+            .split(',')
+            .collect();
+
+        let mut workspaces: Vec<Workspace> = Vec::new();
+        workspaces.reserve(workspaces_str.len());
+        for workspace_str in workspaces_str.iter() {
+            let workspace = match Workspace::from_str(&workspace_str) {
+                Ok(val) => val,
+                Err(_) => continue,
+            };
+            workspaces.push(workspace);
+        }
+
+        let windows_str: Vec<&str> = data
+            .last()
+            .unwrap_or(&"0")
+            .trim()
+            .trim_matches(&['[', ']'])
+            .split(',')
+            .collect();
+
+        let mut windows: Vec<Window> = Vec::new();
+        windows.reserve(windows_str.len());
+        for window_str in windows_str.iter() {
+            let window = match Window::from_str(&window_str) {
+                Ok(val) => val,
+                Err(_) => continue,
+            };
+            windows.push(window);
+        }
+
+        Ok(Program {
+            class: class.to_string(),
+            workspaces: workspaces,
+            windows: windows,
+            moved: false,
+        })
+    }
+}
+
 #[derive(Clone, Debug)]
-pub struct Position {
+pub struct Workspace {
     pub workspace_id: i32,
     pub timestamp: i64,
+}
+
+impl ToString for Workspace {
+    fn to_string(&self) -> String {
+        format!("{};{}", self.workspace_id, self.timestamp)
+    }
+}
+
+impl FromStr for Workspace {
+    type Err = ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.is_empty() {
+            return Err(ParseError::InvalidFormat);
+        }
+        let parts: Vec<&str> = s.split(";").collect();
+        if parts.len() != 2 {
+            return Err(ParseError::InvalidFormat);
+        }
+
+        let workspace_id: i32 = parts[0].parse()?;
+        let timestamp: i64 = parts[1].parse()?;
+
+        Ok(Workspace {
+            workspace_id: workspace_id,
+            timestamp: timestamp,
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Window {
+    pub at: (i16, i16),
+    pub size: (i16, i16),
+    pub floating: bool,
+    pub timestamp: i64,
+}
+
+impl ToString for Window {
+    fn to_string(&self) -> String {
+        format!(
+            "{};{};{};{};{};{}",
+            self.at.0, self.at.1, self.size.0, self.size.1, self.floating, self.timestamp
+        )
+    }
+}
+
+impl FromStr for Window {
+    type Err = ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.is_empty() {
+            return Err(ParseError::InvalidFormat);
+        }
+        let parts: Vec<&str> = s.split(";").collect();
+        if parts.len() != 6 {
+            // Return a ParseIntError by attempting a dummy parse
+            // because ParseIntError has no public constructor.
+            return Err(ParseError::InvalidFormat);
+        }
+
+        let at_x: i16 = parts[0].parse()?;
+        let at_y: i16 = parts[1].parse()?;
+        let size_x: i16 = parts[2].parse()?;
+        let size_y: i16 = parts[3].parse()?;
+        let floating: bool = bool::from_str(parts[4])?;
+        let timestamp: i64 = parts[5].parse()?;
+
+        Ok(Window {
+            at: (at_x, at_y),
+            size: (size_x, size_y),
+            floating: floating,
+            timestamp: timestamp,
+        })
+    }
 }
 
 pub struct State {
@@ -92,9 +257,9 @@ impl State {
             }
             let mut programs = self.programs.0.lock().await;
             if !programs.contains_key(&class) {
-                let mut positions: Vec<Position> = Vec::new();
+                let mut positions: Vec<Workspace> = Vec::new();
                 // If this is the first time we are opening a window we should store that
-                positions.push(Position {
+                positions.push(Workspace {
                     workspace_id: self.workspace.load(Ordering::Relaxed),
                     timestamp: Utc::now().timestamp(),
                 });
@@ -102,7 +267,8 @@ impl State {
                     class.clone(),
                     Program {
                         class: class.clone(),
-                        positions: positions,
+                        workspaces: positions,
+                        windows: Vec::new(),
                         moved: false,
                     },
                 );
@@ -150,19 +316,37 @@ impl State {
             return Ok(());
         }
 
-        let position = Position {
+        let position = Workspace {
             workspace_id: workspace_id,
             timestamp: Utc::now().timestamp(),
         };
-        program.positions.push(position);
+        program.workspaces.push(position);
 
-        while program.positions.len() > self.buffer {
-            program.positions.remove(0);
+        while program.workspaces.len() > self.buffer {
+            program.workspaces.remove(0);
         }
 
         self.changed.store(true, Ordering::Relaxed);
         info!("Program of type {class} got moved to workspace {workspace_id}");
 
+        Ok(())
+    }
+
+    pub async fn floating_window_changed(&self, class: &str, window: Window) -> Result<(), Error> {
+        let mut programs = self.programs.0.lock().await;
+
+        let program = match programs.get_mut(class) {
+            Some(val) => val,
+            None => return Err(Error::BlankClass),
+        };
+
+        program.windows.push(window);
+
+        while program.windows.len() > self.buffer {
+            program.windows.remove(0);
+        }
+
+        self.changed.store(true, Ordering::Relaxed);
         Ok(())
     }
 
@@ -210,6 +394,11 @@ impl State {
             .map(|val| val.1.clone())
             .collect();
         val
+    }
+
+    pub async fn get_mapped_programs(&self) -> HashMap<String, Program> {
+        let programs = self.programs.0.lock().await;
+        programs.clone()
     }
 
     pub fn workspace_changed(&self, id: i32) {
