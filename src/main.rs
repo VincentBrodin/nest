@@ -11,7 +11,7 @@ use tokio::time::sleep;
 use crate::{
     config::Config,
     logger::setup_logger,
-    state::{State, Window},
+    state::{State, Window, Workspace},
     storage::Storage,
 };
 mod config;
@@ -73,53 +73,56 @@ async fn main() -> Result<(), Error> {
         Box::pin(async move {
             if !state
                 .add_window(event.window_class.clone(), event.window_address.clone())
-                .await {
+                .await
+            {
                 return;
             }
             let program = match state.get_program(event.window_class).await {
                 Some(val) => val,
                 None => return,
             };
-            let mut score_map: HashMap<i32, f64> = HashMap::new();
-            let now = Utc::now().timestamp();
-            for position in program.workspaces {
-                // Aging function score = e^(-age / τ)
-                let age = (now - position.timestamp) as f64;
-                let score = f64::powf(f64::consts::E, -age / config.tau);
-                debug!("Position got a score of {score}");
-                match score_map.get(&position.workspace_id) {
-                    Some(val) => score_map.insert(position.workspace_id, *val + score),
-                    None => score_map.insert(position.workspace_id, score),
-                };
-            }
 
-            let (workspace_id, score) = match score_map.iter().max_by(|a, b| {
-                if a.1 > b.1 {
-                    cmp::Ordering::Greater
-                } else if a.1 < b.1 {
-                    cmp::Ordering::Less
-                } else {
-                    cmp::Ordering::Equal
+            let workspace_id = match calculate_workspace(program.workspaces, config.tau) {
+                Some(val) => val,
+                None => {
+                    info!("Could not calculate why workspace");
+                    return;
                 }
-            }) {
+            };
+
+            match state.move_window(&event.window_address, workspace_id).await {
+                Ok(moved) => {
+                    if moved {
+                        info!("Moved window {} to {}", event.window_address, workspace_id)
+                    } else {
+                        info!(
+                            "Tried to move window {} to {} but a move could not be completed",
+                            event.window_address, workspace_id
+                        )
+                    }
+                }
+                Err(err) => error!("Failed to dispatch window move: {err}"),
+            };
+
+            let window = match program.floating_window {
                 Some(val) => val,
                 None => return,
             };
 
             match state
-                .move_window(&event.window_address, *workspace_id)
+                .move_float_window(&event.window_address, window.at, window.size)
                 .await
             {
                 Ok(moved) => {
                     if moved {
                         info!(
-                            "Moved window {} to {} with score {}",
-                            event.window_address, workspace_id, score
+                            "Moved floating window {} to {:?} and resized to {:?}",
+                            event.window_address, window.at, window.size
                         )
                     } else {
                         info!(
-                            "Tried to move window {} to {} with score {} but a move could not be completed",
-                            event.window_address, workspace_id, score
+                            "Tried to moved floating window {} to {:?} and resized to {:?}",
+                            event.window_address, window.at, window.size
                         )
                     }
                 }
@@ -143,7 +146,7 @@ async fn main() -> Result<(), Error> {
                 .await
             {
                 Ok(_) => (),
-                Err(err) => print!("Failed react to window move: {}\n", err),
+                Err(err) => error!("Failed react to window move: {err}"),
             }
         })
     });
@@ -160,77 +163,36 @@ async fn main() -> Result<(), Error> {
                 }
             };
             let programs = state.get_mapped_programs().await;
-            let now = Utc::now().timestamp();
             for client in clients {
                 let program = match programs.get(&client.class) {
                     Some(val) => val,
                     None => continue,
                 };
 
-                let window = match program.windows.last() {
-                    Some(last_window) => {
-                        if client.floating != last_window.floating && !client.floating {
-                            info!(
-                                "Floating window of type {} got toggeled to not float",
-                                client.class
-                            );
-                            Some(Window {
-                                at: (0, 0),
-                                size: (0, 0),
-                                floating: false,
-                                timestamp: now,
-                            })
-                        } else if (client.at != last_window.at || client.size != last_window.size)
-                            && client.floating
-                        {
-                            info!(
-                                "Floating window of type {} got moved from {:?} -> {:?} or resized from {:?} -> {:?}",
-                                client.class,
-                                last_window.at,
-                                client.at,
-                                last_window.size,
-                                client.size,
-                            );
-                            Some(Window {
+                if client.floating {
+                    match state
+                        .add_floating_window(
+                            &client.class,
+                            Window {
                                 at: client.at,
                                 size: client.size,
-                                floating: client.floating,
-                                timestamp: now,
-                            })
-                        } else {
-                            None
+                            },
+                        )
+                        .await
+                    {
+                        Ok(()) => debug!("Tracking floating window of type {}", client.class),
+                        Err(err) => error!("Failed to add floating window: {err}"),
+                    };
+                } else if program.floating_window.is_some() {
+                    match state.remove_floating_window(&client.class).await {
+                        Ok(()) => {
+                            debug!("Stopped tracking floating window of type {}", client.class)
                         }
+                        Err(err) => error!("Failed to remove floating window: {err}"),
                     }
-                    None => {
-                        if client.floating {
-                            Some(Window {
-                                at: client.at,
-                                size: client.size,
-                                floating: true,
-                                timestamp: now,
-                            })
-                        } else {
-                            Some(Window {
-                                at: (0, 0),
-                                size: (0, 0),
-                                floating: false,
-                                timestamp: now,
-                            })
-                        }
-                    }
-                };
-
-                match window {
-                    Some(window) => {
-                        match state.floating_window_changed(&client.class, window).await {
-                            Ok(()) => (),
-                            Err(err) => error!("Failed to react to floating window changed: {err}"),
-                        }
-                    }
-                    None => (),
                 }
             }
-            sleep(Duration::from_secs(5)).await;
+            sleep(Duration::from_secs(config.tracking_requency)).await;
         }
     });
 
@@ -257,4 +219,32 @@ async fn main() -> Result<(), Error> {
 
     event_listener.start_listener_async().await?;
     Ok(())
+}
+
+fn calculate_workspace(workspaces: Vec<Workspace>, tau: f64) -> Option<i32> {
+    let mut score_map: HashMap<i32, f64> = HashMap::new();
+    let now = Utc::now().timestamp();
+    for workspace in workspaces {
+        // Aging function score = e^(-age / τ)
+        let age = (now - workspace.timestamp) as f64;
+        let score = f64::powf(f64::consts::E, -age / tau);
+        debug!("Position got a score of {score}");
+        match score_map.get(&workspace.workspace_id) {
+            Some(val) => score_map.insert(workspace.workspace_id, *val + score),
+            None => score_map.insert(workspace.workspace_id, score),
+        };
+    }
+
+    match score_map.iter().max_by(|a, b| {
+        if a.1 > b.1 {
+            cmp::Ordering::Greater
+        } else if a.1 < b.1 {
+            cmp::Ordering::Less
+        } else {
+            cmp::Ordering::Equal
+        }
+    }) {
+        Some(val) => Some(*val.0),
+        None => None,
+    }
 }

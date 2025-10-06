@@ -10,9 +10,7 @@ use std::{
 
 use chrono::Utc;
 use hyprland::{
-    dispatch::{
-        Dispatch, DispatchType, Position, WindowIdentifier, WorkspaceIdentifierWithSpecial,
-    },
+    dispatch::{Dispatch, DispatchType, WindowIdentifier, WorkspaceIdentifierWithSpecial},
     error::HyprError,
     shared::Address,
 };
@@ -58,8 +56,9 @@ impl<T, U> Clone for SafeMap<T, U> {
 pub struct Program {
     pub class: String,
     pub workspaces: Vec<Workspace>,
-    pub windows: Vec<Window>,
+    pub floating_window: Option<Window>,
     pub moved: bool,
+    pub float_moved: bool,
 }
 
 impl ToString for Program {
@@ -72,14 +71,10 @@ impl ToString for Program {
                 buf.push(',');
             }
         }
-        buf.push_str("]&[");
-        for (i, window) in self.windows.iter().enumerate() {
-            buf.push_str(&window.to_string());
-            if i != self.windows.len() - 1 {
-                buf.push(',');
-            }
+        match &self.floating_window {
+            Some(window) => buf.push_str(&format!("]&[{}]", window.to_string())),
+            None => buf.push_str("]&[]"),
         }
-        buf.push(']');
         buf
     }
 }
@@ -110,29 +105,19 @@ impl FromStr for Program {
             workspaces.push(workspace);
         }
 
-        let windows_str: Vec<&str> = data
-            .last()
-            .unwrap_or(&"0")
-            .trim()
-            .trim_matches(&['[', ']'])
-            .split(',')
-            .collect();
+        let window_str = data.last().unwrap_or(&"0").trim().trim_matches(&['[', ']']);
 
-        let mut windows: Vec<Window> = Vec::new();
-        windows.reserve(windows_str.len());
-        for window_str in windows_str.iter() {
-            let window = match Window::from_str(&window_str) {
-                Ok(val) => val,
-                Err(_) => continue,
-            };
-            windows.push(window);
-        }
+        let window = match Window::from_str(window_str) {
+            Ok(window) => Some(window),
+            Err(_) => None,
+        };
 
         Ok(Program {
             class: class.to_string(),
             workspaces: workspaces,
-            windows: windows,
+            floating_window: window,
             moved: false,
+            float_moved: false,
         })
     }
 }
@@ -175,15 +160,13 @@ impl FromStr for Workspace {
 pub struct Window {
     pub at: (i16, i16),
     pub size: (i16, i16),
-    pub floating: bool,
-    pub timestamp: i64,
 }
 
 impl ToString for Window {
     fn to_string(&self) -> String {
         format!(
-            "{};{};{};{};{};{}",
-            self.at.0, self.at.1, self.size.0, self.size.1, self.floating, self.timestamp
+            "{};{};{};{}",
+            self.at.0, self.at.1, self.size.0, self.size.1
         )
     }
 }
@@ -196,7 +179,7 @@ impl FromStr for Window {
             return Err(ParseError::InvalidFormat);
         }
         let parts: Vec<&str> = s.split(";").collect();
-        if parts.len() != 6 {
+        if parts.len() != 4 {
             // Return a ParseIntError by attempting a dummy parse
             // because ParseIntError has no public constructor.
             return Err(ParseError::InvalidFormat);
@@ -206,14 +189,10 @@ impl FromStr for Window {
         let at_y: i16 = parts[1].parse()?;
         let size_x: i16 = parts[2].parse()?;
         let size_y: i16 = parts[3].parse()?;
-        let floating: bool = bool::from_str(parts[4])?;
-        let timestamp: i64 = parts[5].parse()?;
 
         Ok(Window {
             at: (at_x, at_y),
             size: (size_x, size_y),
-            floating: floating,
-            timestamp: timestamp,
         })
     }
 }
@@ -268,8 +247,9 @@ impl State {
                     Program {
                         class: class.clone(),
                         workspaces: positions,
-                        windows: Vec::new(),
+                        floating_window: None,
                         moved: false,
+                        float_moved: false,
                     },
                 );
             }
@@ -332,24 +312,6 @@ impl State {
         Ok(())
     }
 
-    pub async fn floating_window_changed(&self, class: &str, window: Window) -> Result<(), Error> {
-        let mut programs = self.programs.0.lock().await;
-
-        let program = match programs.get_mut(class) {
-            Some(val) => val,
-            None => return Err(Error::BlankClass),
-        };
-
-        program.windows.push(window);
-
-        while program.windows.len() > self.buffer {
-            program.windows.remove(0);
-        }
-
-        self.changed.store(true, Ordering::Relaxed);
-        Ok(())
-    }
-
     pub async fn move_window(&self, address: &Address, workspace_id: i32) -> Result<bool, Error> {
         let addresses = self.addresses.0.lock().await;
         let mut programs = self.programs.0.lock().await;
@@ -376,6 +338,100 @@ impl State {
             Err(_) => {
                 // We failed to move the window (this does not mean an error the window could be in the right position already)
                 program.moved = false;
+                Ok(false)
+            }
+        }
+    }
+
+    pub async fn add_floating_window(&self, class: &str, window: Window) -> Result<(), Error> {
+        let mut programs = self.programs.0.lock().await;
+
+        let program = match programs.get_mut(class) {
+            Some(val) => val,
+            None => return Err(Error::BlankClass),
+        };
+
+        let change = match &program.floating_window {
+            Some(last) => last.at != window.at || last.size != window.size,
+            None => true,
+        };
+
+        if change {
+            program.floating_window = Some(window);
+            self.changed.store(true, Ordering::Relaxed);
+        }
+
+        Ok(())
+    }
+
+    pub async fn remove_floating_window(&self, class: &str) -> Result<(), Error> {
+        let mut programs = self.programs.0.lock().await;
+
+        let program = match programs.get_mut(class) {
+            Some(val) => val,
+            None => return Err(Error::BlankClass),
+        };
+
+        program.floating_window = None;
+        self.changed.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+
+    pub async fn move_float_window(
+        &self,
+        address: &Address,
+        at: (i16, i16),
+        size: (i16, i16),
+    ) -> Result<bool, Error> {
+        let addresses = self.addresses.0.lock().await;
+        let mut programs = self.programs.0.lock().await;
+
+        let class = match addresses.get(address) {
+            Some(val) => val,
+            None => return Err(Error::BlankAddress),
+        };
+
+        let program = match programs.get_mut(class) {
+            Some(val) => val,
+            None => return Err(Error::BlankClass),
+        };
+
+        program.float_moved = true;
+
+        match Dispatch::call_async(DispatchType::ToggleFloating(Some(
+            WindowIdentifier::Address(address.clone()),
+        )))
+        .await
+        {
+            Ok(_) => (),
+            Err(_) => {
+                program.float_moved = false;
+                return Ok(false);
+            }
+        }
+
+        match Dispatch::call_async(DispatchType::MoveWindowPixel(
+            hyprland::dispatch::Position::Exact(at.0, at.1),
+            WindowIdentifier::Address(address.clone()),
+        ))
+        .await
+        {
+            Ok(_) => (),
+            Err(_) => {
+                program.float_moved = false;
+                return Ok(false);
+            }
+        }
+
+        match Dispatch::call_async(DispatchType::ResizeWindowPixel(
+            hyprland::dispatch::Position::Exact(size.0, size.1),
+            WindowIdentifier::Address(address.clone()),
+        ))
+        .await
+        {
+            Ok(_) => Ok(true),
+            Err(_) => {
+                program.float_moved = false;
                 Ok(false)
             }
         }
