@@ -18,6 +18,8 @@ use log::{debug, info};
 use thiserror::Error;
 use tokio::sync::Mutex;
 
+use crate::config::{Config, FilterMode};
+
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("hyprland error")]
@@ -32,9 +34,9 @@ pub enum Error {
 pub enum ParseError {
     #[error("invalid format found")]
     InvalidFormat,
-    #[error("could parse int")]
+    #[error("could parse int: {0}")]
     InvalidInt(#[from] ParseIntError),
-    #[error("could parse bool")]
+    #[error("could parse bool: {0}")]
     InvalidBool(#[from] ParseBoolError),
 }
 
@@ -100,7 +102,7 @@ impl FromStr for Program {
         for workspace_str in workspaces_str.iter() {
             let workspace = match Workspace::from_str(&workspace_str) {
                 Ok(val) => val,
-                Err(_) => continue,
+                Err(err) => return Err(err),
             };
             workspaces.push(workspace);
         }
@@ -197,29 +199,48 @@ impl FromStr for Window {
     }
 }
 
+#[derive(Clone)]
 pub struct State {
     addresses: SafeMap<Address, String>,
     programs: SafeMap<String, Program>,
-    buffer: usize,
-    workspace: Arc<AtomicI32>,
-    ignore: Arc<[String]>,
+    current_workspace: Arc<AtomicI32>,
+    workspace_list: Arc<[String]>,
+    workspace_mode: FilterMode,
+    workspace_buffer: usize,
+    floating_list: Arc<[String]>,
+    floating_mode: FilterMode,
     pub changed: Arc<AtomicBool>,
 }
 
 impl State {
-    pub fn new(buffer: usize, ignore: Arc<[String]>) -> Self {
+    pub fn new(
+        workspace_buffer: usize,
+        workspace_list: Arc<[String]>,
+        workspace_mode: FilterMode,
+        floating_list: Arc<[String]>,
+        floating_mode: FilterMode,
+    ) -> Self {
         Self {
             addresses: SafeMap::new(),
             programs: SafeMap::new(),
-            buffer: buffer,
-            ignore: ignore,
-            workspace: Arc::new(AtomicI32::new(1)),
+            workspace_list: workspace_list,
+            workspace_mode: workspace_mode,
+            workspace_buffer: workspace_buffer,
+            floating_list: floating_list,
+            floating_mode: floating_mode,
+            current_workspace: Arc::new(AtomicI32::new(1)),
             changed: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    pub async fn load(programs: Vec<Program>, buffer: usize, ignore: Arc<[String]>) -> Self {
-        let state = Self::new(buffer, ignore);
+    pub async fn load(programs: Vec<Program>, config: Config) -> Self {
+        let state = Self::new(
+            config.workspace.buffer,
+            config.workspace.filter.programs.into(),
+            config.workspace.filter.mode,
+            config.floating.filter.programs.into(),
+            config.floating.filter.mode,
+        );
         let mut programs_map = state.programs.0.lock().await;
         for program in programs {
             programs_map.insert(program.class.clone(), program);
@@ -227,19 +248,15 @@ impl State {
         state.clone()
     }
 
-    pub async fn add_window(&self, class: String, address: Address) -> bool {
+    pub async fn add_window(&self, class: String, address: Address) {
         {
             // Creates new program if none exists
-            if self.ignore.contains(&class) {
-                debug!("{class} is in the ignore list");
-                return false;
-            }
             let mut programs = self.programs.0.lock().await;
             if !programs.contains_key(&class) {
                 let mut positions: Vec<Workspace> = Vec::new();
                 // If this is the first time we are opening a window we should store that
                 positions.push(Workspace {
-                    workspace_id: self.workspace.load(Ordering::Relaxed),
+                    workspace_id: self.current_workspace.load(Ordering::Relaxed),
                     timestamp: Utc::now().timestamp(),
                 });
                 let _ = programs.insert(
@@ -257,18 +274,16 @@ impl State {
         {
             // Maps the address to the program
             let mut addresses = self.addresses.0.lock().await;
-            addresses.insert(address, class.clone());
+            addresses.insert(address.clone(), class.clone());
         }
-        debug!("Program of type {class} added");
-
-        true
+        debug!("Window {address} of type {class} added");
     }
 
     // Removes mapping between window and program, it will never remove a programs state
     pub async fn remove_window(&self, address: Address) {
         let mut addresses = self.addresses.0.lock().await;
         if let Some(class) = addresses.remove(&address) {
-            debug!("Program of type {class} removed")
+            debug!("Window {address} of type {class} removed")
         }
     }
 
@@ -302,7 +317,7 @@ impl State {
         };
         program.workspaces.push(position);
 
-        while program.workspaces.len() > self.buffer {
+        while program.workspaces.len() > self.workspace_buffer {
             program.workspaces.remove(0);
         }
 
@@ -320,6 +335,13 @@ impl State {
             Some(val) => val,
             None => return Err(Error::BlankAddress),
         };
+
+        let is_in_list = self.workspace_list.contains(class);
+        if (!is_in_list && self.workspace_mode == FilterMode::Include)
+            || (is_in_list && self.workspace_mode == FilterMode::Exclude)
+        {
+            return Ok(false);
+        }
 
         let program = match programs.get_mut(class) {
             Some(val) => val,
@@ -391,6 +413,13 @@ impl State {
             None => return Err(Error::BlankAddress),
         };
 
+        let is_in_list = self.floating_list.contains(class);
+        if (!is_in_list && self.floating_mode == FilterMode::Include)
+            || (is_in_list && self.floating_mode == FilterMode::Exclude)
+        {
+            return Ok(false);
+        }
+
         let program = match programs.get_mut(class) {
             Some(val) => val,
             None => return Err(Error::BlankClass),
@@ -458,19 +487,10 @@ impl State {
     }
 
     pub fn workspace_changed(&self, id: i32) {
-        self.workspace.store(id, Ordering::Relaxed);
+        self.current_workspace.store(id, Ordering::Relaxed);
     }
-}
 
-impl Clone for State {
-    fn clone(&self) -> Self {
-        Self {
-            addresses: self.addresses.clone(),
-            programs: self.programs.clone(),
-            changed: self.changed.clone(),
-            ignore: self.ignore.clone(),
-            workspace: self.workspace.clone(),
-            buffer: self.buffer,
-        }
+    pub fn current_workspace(&self) -> i32 {
+        self.current_workspace.load(Ordering::Relaxed)
     }
 }
