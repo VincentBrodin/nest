@@ -78,7 +78,7 @@ log_level = "INFO" # OFF, ERROR, WARN, INFO, DEBUG, TRACE
 
 [workspace]
 buffer = 30 # Number of records nest will keep per program class
-tau = 604800.0 # Decay constant for learning: e^(-age/tau), where age is in seconds (default = 1h)
+tau = 604800.0 # Decay constant for learning: e^(-age/tau), where age is in seconds (default = 1 week)
 
 [workspace.filter]
 mode = "Exclude" # Include, Exclude
