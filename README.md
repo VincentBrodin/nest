@@ -1,11 +1,8 @@
 # nest
 
 **Your windows always find their way home.**
-
 nest is an intelligent window placement system for [Hyprland](https://github.com/hyprwm/Hyprland).
-
 It learns where you like your apps to live and ensures they always open in the right workspace, no hunting, no dragging, no friction.
-
 Think of it like [zoxide](https://github.com/ajeetdsouza/zoxide), but for your windows.
 
 
@@ -19,7 +16,7 @@ nest is dynamic, adaptive, and invisible.
 
 It’s window rules on **steroids**: automatic, effortless, and always in sync with your habits.
 
-Here’s what sets it apart:
+**Here’s what sets it apart:**
 - **Learns your habits** - nest observes where you place your apps and remembers it automatically. No manual rules, no configs.
 - **Workspace aware** - your apps consistently open in the workspaces you expect (browser on 2, terminal on 1, etc.).
 - **Floating window memory** - optionally restores the size, position, and state of floating windows.
@@ -31,9 +28,7 @@ The goal of nest is to feel like an extension of your workflow, not another tool
 
 ## Growing with you
 nest is constantly evolving.
-
 Feedback isn’t just welcome, it’s part of the process.
-
 Well-written ideas and suggestions often make it into the next release.
 
 If you have feedback, open an issue or start a discussion - your input directly helps shape nest’s future.
