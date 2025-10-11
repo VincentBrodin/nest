@@ -2,7 +2,14 @@ use std::{cmp, collections::HashMap, f64, str::FromStr, sync::atomic, time::Dura
 
 use chrono::Utc;
 use hyprland::{
-    data::Clients, error::HyprError, event_listener::AsyncEventListener, shared::HyprData,
+    ctl::{
+        Color,
+        notify::{self, Icon},
+    },
+    data::Clients,
+    error::HyprError,
+    event_listener::AsyncEventListener,
+    shared::HyprData,
 };
 use log::{LevelFilter, debug, error, info};
 use thiserror::Error;
@@ -30,8 +37,6 @@ enum Error {
     HyprError(#[from] HyprError),
     #[error("io error")]
     IO(#[from] std::io::Error),
-    #[error("parse error")]
-    ParseIntError(#[from] std::num::ParseIntError),
     #[error("storage error")]
     Storage(#[from] crate::storage::Error),
     #[error("config error")]
@@ -42,7 +47,19 @@ enum Error {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Error> {
-    let config = Config::new(APP_NAME, CONFIG_FILE_NAME)?;
+    let config = match Config::new(APP_NAME, CONFIG_FILE_NAME) {
+        Ok(val) => val,
+        Err(err) => {
+            notify::call_async(
+                Icon::Error,
+                Duration::from_secs(20),
+                Color::new(225, 0, 0, 225),
+                format!("[nest] Failed to read config: {}", err),
+            )
+            .await?;
+            return Err(Error::Config(err));
+        }
+    };
 
     let log_level = match LevelFilter::from_str(&config.log_level) {
         Ok(val) => val,
@@ -55,7 +72,20 @@ async fn main() -> Result<(), Error> {
     setup_logger(APP_NAME, LOG_FILE_NAME, log_level)?;
 
     let mut storage = Storage::new(APP_NAME, STORAGE_FILE_NAME)?;
-    let state = State::load(storage.read()?, config.buffer, config.ignore.into()).await;
+    let storage_value = match storage.read() {
+        Ok(val) => val,
+        Err(err) => {
+            notify::call_async(
+                Icon::Error,
+                Duration::from_secs(20),
+                Color::new(225, 0, 0, 225),
+                format!("[nest] Failed to read storage file: {}", err),
+            )
+            .await?;
+            return Err(Error::Storage(err));
+        }
+    };
+    let state = State::load(storage_value, config.clone()).await;
 
     let mut event_listener = AsyncEventListener::new();
 
@@ -71,22 +101,19 @@ async fn main() -> Result<(), Error> {
     event_listener.add_window_opened_handler(move |event| {
         let state = add_state.clone();
         Box::pin(async move {
-            if !state
+            state
                 .add_window(event.window_class.clone(), event.window_address.clone())
-                .await
-            {
-                return;
-            }
+                .await;
             let program = match state.get_program(event.window_class).await {
                 Some(val) => val,
                 None => return,
             };
 
-            let workspace_id = match calculate_workspace(program.workspaces, config.tau) {
+            let workspace_id = match calculate_workspace(program.workspaces, config.workspace.tau) {
                 Some(val) => val,
                 None => {
-                    info!("Could not calculate why workspace");
-                    return;
+                    debug!("Could not calculate where to move program");
+                    state.current_workspace()
                 }
             };
 
@@ -192,7 +219,7 @@ async fn main() -> Result<(), Error> {
                     }
                 }
             }
-            sleep(Duration::from_secs(config.tracking_frequency)).await;
+            sleep(Duration::from_secs(config.floating.frequency)).await;
         }
     });
 

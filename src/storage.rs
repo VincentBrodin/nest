@@ -17,9 +17,9 @@ pub struct Storage {
 pub enum Error {
     #[error("could not find config directory")]
     MissingConfig,
-    #[error("io operation failed")]
+    #[error("io operation failed: {0}")]
     IO(#[from] std::io::Error),
-    #[error("parsing int error")]
+    #[error("parsing error: {0}")]
     ParseError(#[from] ParseError),
 }
 
@@ -55,8 +55,8 @@ impl Storage {
             let program = match Program::from_str(line) {
                 Ok(val) => val,
                 Err(err) => {
-                    error!("A program failed to parse: {err}");
-                    continue;
+                    // error!("A program failed to parse: {err}");
+                    return Err(Error::ParseError(err));
                 }
             };
             programs.push(program);
