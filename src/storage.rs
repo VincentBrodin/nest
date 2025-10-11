@@ -1,11 +1,13 @@
 use std::{
     fs::{File, OpenOptions, create_dir_all},
     io::{Read, Seek, SeekFrom, Write},
+    str::FromStr,
 };
 
+use log::error;
 use thiserror::Error;
 
-use crate::state::{Position, Program};
+use crate::state::{ParseError, Program};
 
 pub struct Storage {
     file: File,
@@ -15,8 +17,10 @@ pub struct Storage {
 pub enum Error {
     #[error("could not find config directory")]
     MissingConfig,
-    #[error("io operation failed")]
+    #[error("io operation failed: {0}")]
     IO(#[from] std::io::Error),
+    #[error("parsing error: {0}")]
+    ParseError(#[from] ParseError),
 }
 
 impl Storage {
@@ -48,29 +52,13 @@ impl Storage {
         programs.reserve(lines.len());
 
         for line in lines {
-            let split: Vec<&str> = line.split(':').collect();
-            let class = match split.first() {
-                Some(val) => *val,
-                None => continue,
+            let program = match Program::from_str(line) {
+                Ok(val) => val,
+                Err(err) => {
+                    // error!("A program failed to parse: {err}");
+                    return Err(Error::ParseError(err));
+                }
             };
-            let objects: Vec<&str> = match split.last() {
-                Some(val) => val.trim().trim_matches(&['[', ']']).split(',').collect(),
-                None => continue,
-            };
-
-            let mut program = Program {
-                class: class.to_string(),
-                positions: Vec::new(),
-                moved: false,
-            };
-            program.positions.reserve(objects.len());
-            for object in objects {
-                let position = match str_to_position(object) {
-                    Some(val) => val,
-                    None => continue,
-                };
-                program.positions.push(position);
-            }
             programs.push(program);
         }
         Ok(programs)
@@ -81,40 +69,11 @@ impl Storage {
         self.file.seek(SeekFrom::Start(0))?;
         let mut content = String::new();
         for program in programs {
-            content.push_str(&format!("{}:[", program.class));
-            for (i, position) in program.positions.iter().enumerate() {
-                if i == program.positions.len() - 1 {
-                    content.push_str(&format!("{};{}", position.workspace_id, position.timestamp));
-                } else {
-                    content.push_str(&format!(
-                        "{};{},",
-                        position.workspace_id, position.timestamp
-                    ));
-                }
-            }
-            content.push_str("]\n");
+            content.push_str(&program.to_string());
+            content.push('\n');
         }
         self.file.write_all(content.as_bytes())?;
         self.file.flush()?;
         Ok(())
     }
-}
-
-fn str_to_position(value: &str) -> Option<Position> {
-    if value.is_empty() {
-        return None;
-    }
-    let split: Vec<&str> = value.split(";").collect();
-    let workspace_id: i32 = match split.first()?.parse() {
-        Ok(val) => val,
-        Err(_) => return None,
-    };
-    let time: i64 = match split.last()?.parse() {
-        Ok(val) => val,
-        Err(_) => return None,
-    };
-    Some(Position {
-        workspace_id: workspace_id,
-        timestamp: time,
-    })
 }
