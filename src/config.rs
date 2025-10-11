@@ -11,21 +11,45 @@ use thiserror::Error;
 pub enum Error {
     #[error("could not find config directory")]
     MissingConfig,
-    #[error("io operation failed")]
+    #[error("io operation failed: {0}")]
     IO(#[from] std::io::Error),
-    #[error("toml serialize operation failed")]
+    #[error("failed to write config: {0}")]
     TomlSer(#[from] toml::ser::Error),
-    #[error("toml deserialize operation failed")]
+    #[error("failed to read config: {0}")]
     TomlDe(#[from] toml::de::Error),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Config {
-    pub tau: f64,
-    pub buffer: usize,
+    pub workspace: WorkspaceConfig,
+    pub floating: FloatingConfig,
     pub save_frequency: u64,
     pub log_level: String,
-    pub ignore: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WorkspaceConfig {
+    pub filter: ProgramFilter,
+    pub buffer: usize,
+    pub tau: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FloatingConfig {
+    pub filter: ProgramFilter,
+    pub frequency: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ProgramFilter {
+    pub mode: FilterMode,
+    pub programs: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, PartialOrd)]
+pub enum FilterMode {
+    Include,
+    Exclude,
 }
 
 impl Config {
@@ -57,10 +81,22 @@ impl Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            tau: 3600.0,
-            buffer: 30,
+            workspace: WorkspaceConfig {
+                filter: ProgramFilter {
+                    mode: FilterMode::Exclude,
+                    programs: Vec::new(),
+                },
+                buffer: 30,
+                tau: 604800.0,
+            },
+            floating: FloatingConfig {
+                filter: ProgramFilter {
+                    mode: FilterMode::Include,
+                    programs: Vec::new(),
+                },
+                frequency: 5,
+            },
             save_frequency: 10,
-            ignore: Vec::new(),
             log_level: log::LevelFilter::Info.as_str().to_string(),
         }
     }

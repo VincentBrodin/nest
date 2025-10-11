@@ -1,12 +1,26 @@
 use std::{cmp, collections::HashMap, f64, str::FromStr, sync::atomic, time::Duration};
 
 use chrono::Utc;
-use hyprland::{error::HyprError, event_listener::AsyncEventListener};
+use hyprland::{
+    ctl::{
+        Color,
+        notify::{self, Icon},
+    },
+    data::Clients,
+    error::HyprError,
+    event_listener::AsyncEventListener,
+    shared::HyprData,
+};
 use log::{LevelFilter, debug, error, info};
 use thiserror::Error;
 use tokio::time::sleep;
 
-use crate::{config::Config, logger::setup_logger, state::State, storage::Storage};
+use crate::{
+    config::Config,
+    logger::setup_logger,
+    state::{State, Window, Workspace},
+    storage::Storage,
+};
 mod config;
 mod logger;
 mod state;
@@ -23,8 +37,6 @@ enum Error {
     HyprError(#[from] HyprError),
     #[error("io error")]
     IO(#[from] std::io::Error),
-    #[error("parse error")]
-    ParseIntError(#[from] std::num::ParseIntError),
     #[error("storage error")]
     Storage(#[from] crate::storage::Error),
     #[error("config error")]
@@ -35,7 +47,19 @@ enum Error {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Error> {
-    let config = Config::new(APP_NAME, CONFIG_FILE_NAME)?;
+    let config = match Config::new(APP_NAME, CONFIG_FILE_NAME) {
+        Ok(val) => val,
+        Err(err) => {
+            notify::call_async(
+                Icon::Error,
+                Duration::from_secs(20),
+                Color::new(225, 0, 0, 225),
+                format!("[nest] Failed to read config: {}", err),
+            )
+            .await?;
+            return Err(Error::Config(err));
+        }
+    };
 
     let log_level = match LevelFilter::from_str(&config.log_level) {
         Ok(val) => val,
@@ -44,10 +68,24 @@ async fn main() -> Result<(), Error> {
             LevelFilter::Error
         }
     };
+
     setup_logger(APP_NAME, LOG_FILE_NAME, log_level)?;
 
     let mut storage = Storage::new(APP_NAME, STORAGE_FILE_NAME)?;
-    let state = State::load(storage.read()?, config.buffer, config.ignore.into()).await;
+    let storage_value = match storage.read() {
+        Ok(val) => val,
+        Err(err) => {
+            notify::call_async(
+                Icon::Error,
+                Duration::from_secs(20),
+                Color::new(225, 0, 0, 225),
+                format!("[nest] Failed to read storage file: {}", err),
+            )
+            .await?;
+            return Err(Error::Storage(err));
+        }
+    };
+    let state = State::load(storage_value, config.clone()).await;
 
     let mut event_listener = AsyncEventListener::new();
 
@@ -63,55 +101,55 @@ async fn main() -> Result<(), Error> {
     event_listener.add_window_opened_handler(move |event| {
         let state = add_state.clone();
         Box::pin(async move {
-            if !state
+            state
                 .add_window(event.window_class.clone(), event.window_address.clone())
-                .await {
-                return;
-            }
+                .await;
             let program = match state.get_program(event.window_class).await {
                 Some(val) => val,
                 None => return,
             };
-            let mut score_map: HashMap<i32, f64> = HashMap::new();
-            let now = Utc::now().timestamp();
-            for position in program.positions {
-                // Aging function score = e^(-age / τ)
-                let age = (now - position.timestamp) as f64;
-                let score = f64::powf(f64::consts::E, -age / config.tau);
-                debug!("Position got a score of {score}");
-                match score_map.get(&position.workspace_id) {
-                    Some(val) => score_map.insert(position.workspace_id, *val + score),
-                    None => score_map.insert(position.workspace_id, score),
-                };
-            }
 
-            let (workspace_id, score) = match score_map.iter().max_by(|a, b| {
-                if a.1 > b.1 {
-                    cmp::Ordering::Greater
-                } else if a.1 < b.1 {
-                    cmp::Ordering::Less
-                } else {
-                    cmp::Ordering::Equal
+            let workspace_id = match calculate_workspace(program.workspaces, config.workspace.tau) {
+                Some(val) => val,
+                None => {
+                    debug!("Could not calculate where to move program");
+                    state.current_workspace()
                 }
-            }) {
+            };
+
+            match state.move_window(&event.window_address, workspace_id).await {
+                Ok(moved) => {
+                    if moved {
+                        info!("Moved window {} to {}", event.window_address, workspace_id)
+                    } else {
+                        info!(
+                            "Tried to move window {} to {} but a move could not be completed",
+                            event.window_address, workspace_id
+                        )
+                    }
+                }
+                Err(err) => error!("Failed to dispatch window move: {err}"),
+            };
+
+            let window = match program.floating_window {
                 Some(val) => val,
                 None => return,
             };
 
             match state
-                .move_window(&event.window_address, *workspace_id)
+                .move_float_window(&event.window_address, window.at, window.size)
                 .await
             {
                 Ok(moved) => {
                     if moved {
                         info!(
-                            "Moved window {} to {} with score {}",
-                            event.window_address, workspace_id, score
+                            "Moved floating window {} to {:?} and resized to {:?}",
+                            event.window_address, window.at, window.size
                         )
                     } else {
                         info!(
-                            "Tried to move window {} to {} with score {} but a move could not be completed",
-                            event.window_address, workspace_id, score
+                            "Tried to moved floating window {} to {:?} and resized to {:?}",
+                            event.window_address, window.at, window.size
                         )
                     }
                 }
@@ -135,9 +173,54 @@ async fn main() -> Result<(), Error> {
                 .await
             {
                 Ok(_) => (),
-                Err(err) => print!("Failed react to window move: {}\n", err),
+                Err(err) => error!("Failed react to window move: {err}"),
             }
         })
+    });
+
+    let window_state = state.clone();
+    tokio::spawn(async move {
+        let state = window_state.clone();
+        loop {
+            let clients = match Clients::get_async().await {
+                Ok(val) => val,
+                Err(err) => {
+                    error!("Failed to fetch clients: {err}");
+                    continue;
+                }
+            };
+            let programs = state.get_mapped_programs().await;
+            for client in clients {
+                let program = match programs.get(&client.class) {
+                    Some(val) => val,
+                    None => continue,
+                };
+
+                if client.floating {
+                    match state
+                        .add_floating_window(
+                            &client.class,
+                            Window {
+                                at: client.at,
+                                size: client.size,
+                            },
+                        )
+                        .await
+                    {
+                        Ok(()) => debug!("Tracking floating window of type {}", client.class),
+                        Err(err) => error!("Failed to add floating window: {err}"),
+                    };
+                } else if program.floating_window.is_some() {
+                    match state.remove_floating_window(&client.class).await {
+                        Ok(()) => {
+                            debug!("Stopped tracking floating window of type {}", client.class)
+                        }
+                        Err(err) => error!("Failed to remove floating window: {err}"),
+                    }
+                }
+            }
+            sleep(Duration::from_secs(config.floating.frequency)).await;
+        }
     });
 
     let runtime_state = state.clone();
@@ -163,4 +246,32 @@ async fn main() -> Result<(), Error> {
 
     event_listener.start_listener_async().await?;
     Ok(())
+}
+
+fn calculate_workspace(workspaces: Vec<Workspace>, tau: f64) -> Option<i32> {
+    let mut score_map: HashMap<i32, f64> = HashMap::new();
+    let now = Utc::now().timestamp();
+    for workspace in workspaces {
+        // Aging function score = e^(-age / τ)
+        let age = (now - workspace.timestamp) as f64;
+        let score = f64::powf(f64::consts::E, -age / tau);
+        debug!("Position got a score of {score}");
+        match score_map.get(&workspace.workspace_id) {
+            Some(val) => score_map.insert(workspace.workspace_id, *val + score),
+            None => score_map.insert(workspace.workspace_id, score),
+        };
+    }
+
+    match score_map.iter().max_by(|a, b| {
+        if a.1 > b.1 {
+            cmp::Ordering::Greater
+        } else if a.1 < b.1 {
+            cmp::Ordering::Less
+        } else {
+            cmp::Ordering::Equal
+        }
+    }) {
+        Some(val) => Some(*val.0),
+        None => None,
+    }
 }

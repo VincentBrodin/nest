@@ -1,19 +1,37 @@
 # nest
 
 **Your windows always find their way home.**
+nest is an intelligent window placement system for [Hyprland](https://github.com/hyprwm/Hyprland).
+It learns where you like your apps to live and ensures they always open in the right workspace, no hunting, no dragging, no friction.
+Think of it like [zoxide](https://github.com/ajeetdsouza/zoxide), but for your windows.
 
-nest is an automatic window switcher for [Hyprland](https://github.com/hyprwm/Hyprland).  
-It learns where you like your apps to live and ensures they always end up in the right workspace, no hunting, no moving, no friction.
-Kind of like [zoxide](https://github.com/ajeetdsouza/zoxide), but for window switching.
-## Features
-
-- **Learns your habits** – remembers where you usually place apps.
-- **Workspace aware** – keep your browser on workspace 2 and terminal on workspace 1, automatically.
-- **Lightweight** – runs quietly in the background without slowing you down.
 
 ## Quick Demo
 
 ![demo](./assets/demo.gif)
+
+## What makes nest special
+Unlike traditional window rules, which are static (*you set them up once, and if your habits change, you have to update them yourself.*),
+nest is dynamic, adaptive, and invisible.
+
+It’s window rules on **steroids**: automatic, effortless, and always in sync with your habits.
+
+**Here’s what sets it apart:**
+- **Learns your habits** - nest observes where you place your apps and remembers it automatically. No manual rules, no configs.
+- **Workspace aware** - your apps consistently open in the workspaces you expect (browser on 2, terminal on 1, etc.).
+- **Floating window memory** - optionally restores the size, position, and state of floating windows.
+- **Seamless experience** - runs quietly in the background; you should never notice it working.
+- **Adaptive by design** - as your habits change, nest learns and adapts with you.
+- **Lightweight** - minimal footprint, no unnecessary overhead, just smooth automation.
+
+The goal of nest is to feel like an extension of your workflow, not another tool to manage.
+
+## Growing with you
+nest is constantly evolving.
+Feedback isn’t just welcome, it’s part of the process.
+Well-written ideas and suggestions often make it into the next release.
+
+If you have feedback, open an issue or start a discussion - your input directly helps shape nest’s future.
 
 ##  Installation
 
@@ -44,7 +62,7 @@ exec-once = nest
 exec-once = /PATH/TO/nest/target/release/nest
 ```
 
-On first run, nest will create a config directory at `~/.config/nest/` (by default using your env) with the following files:
+On first run, nest will create a config directory at `~/.config/nest/` with the following files:
 
 - `config.toml` – configuration settings
 - `output.txt` – program output/logs
@@ -55,9 +73,21 @@ On first run, nest will create a config directory at `~/.config/nest/` (by defau
 Example `config.toml`:
 
 ```toml
-tau = 3600.0  # Decay constant for learning: e^(-age/tau), where age is in seconds (default = 1h)  
-buffer = 30  # Number of records to keep per program class  
-save_frequency = 10  # Seconds between saves (no save if no changes)  
-log_level = "INFO"  # OFF, ERROR, WARN, INFO, DEBUG, TRACE
-ignore = []  # List of program classes to ignore (see storage.txt for the classes that are being tracked)
+save_frequency = 10 # Seconds between saves
+log_level = "INFO" # OFF, ERROR, WARN, INFO, DEBUG, TRACE
+
+[workspace]
+buffer = 30 # Number of records nest will keep per program class
+tau = 604800.0 # Decay constant for learning: e^(-age/tau), where age is in seconds (default = 1 week)
+
+[workspace.filter]
+mode = "Exclude" # Include, Exclude
+programs = [] # List of program classes you wish to either include or exclude
+
+[floating]
+frequency = 5 # How often nest will look for new floating windows
+
+[floating.filter]
+mode = "Include" # Include, Exclude
+programs = [] # List of program classes you wish to either include or exclude
 ```
