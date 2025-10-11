@@ -56,10 +56,21 @@ On first run, nest will create a config directory at `~/.config/nest/` (by defau
 Example `config.toml`:
 
 ```toml
-tau = 3600.0  # Decay constant for learning: e^(-age/tau), where age is in seconds (default = 1h)  
-buffer = 30  # Number of records to keep per program class  
-save_frequency = 10  # Seconds between saves (no save if no changes)  
-tracking_frequency = 5  # Seconds between checking for floating window changes  
-log_level = "INFO"  # OFF, ERROR, WARN, INFO, DEBUG, TRACE
-ignore = []  # List of program classes to ignore (see storage.txt for the classes that are being tracked)
+save_frequency = 10 # Seconds between saves
+log_level = "INFO" # OFF, ERROR, WARN, INFO, DEBUG, TRACE
+
+[workspace]
+buffer = 30 # Number of records nest will keep per program class
+tau = 604800.0 # Decay constant for learning: e^(-age/tau), where age is in seconds (default = 1h)
+
+[workspace.filter]
+mode = "Exclude" # Include, Exclude
+programs = [] # List of program classes you wish to either include or exclude
+
+[floating]
+frequency = 5 # How often nest will look for new floating windows
+
+[floating.filter]
+mode = "Include" # Include, Exclude
+programs = [] # List of program classes you wish to either include or exclude
 ```
