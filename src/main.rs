@@ -64,7 +64,7 @@ async fn main() -> Result<(), Error> {
     let log_level = match LevelFilter::from_str(&config.log_level) {
         Ok(val) => val,
         Err(err) => {
-            print!("Failed to set log level: {}\n", err,);
+            error!("Failed to set log level: {err} defualting to ERROR");
             LevelFilter::Error
         }
     };
@@ -269,16 +269,16 @@ fn calculate_workspace(workspaces: Vec<Workspace>, tau: f64) -> Option<i32> {
         };
     }
 
-    match score_map.iter().max_by(|a, b| {
-        if a.1 > b.1 {
-            cmp::Ordering::Greater
-        } else if a.1 < b.1 {
-            cmp::Ordering::Less
-        } else {
-            cmp::Ordering::Equal
-        }
-    }) {
-        Some(val) => Some(*val.0),
-        None => None,
-    }
+    score_map
+        .iter()
+        .max_by(|a, b| {
+            if a.1 > b.1 {
+                cmp::Ordering::Greater
+            } else if a.1 < b.1 {
+                cmp::Ordering::Less
+            } else {
+                cmp::Ordering::Equal
+            }
+        })
+        .map(|val| *val.0)
 }

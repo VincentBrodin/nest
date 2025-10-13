@@ -37,9 +37,10 @@ impl Storage {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(storage_path)?;
 
-        Ok(Self { file: file })
+        Ok(Self { file })
     }
 
     pub fn read(&mut self) -> Result<Vec<Program>, Error> {
@@ -48,8 +49,7 @@ impl Storage {
         self.file.read_to_string(&mut buf)?;
 
         let lines: Vec<&str> = buf.lines().collect();
-        let mut programs: Vec<Program> = Vec::new();
-        programs.reserve(lines.len());
+        let mut programs: Vec<Program> = Vec::with_capacity(lines.len());
 
         for line in lines {
             let program = match Program::from_str(line) {

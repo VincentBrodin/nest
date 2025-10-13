@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    fmt::Display,
     num::ParseIntError,
     str::{FromStr, ParseBoolError},
     sync::{
@@ -35,9 +36,9 @@ pub enum ParseError {
     #[error("invalid format found")]
     InvalidFormat,
     #[error("could parse int: {0}")]
-    InvalidInt(#[from] ParseIntError),
+    Int(#[from] ParseIntError),
     #[error("could parse bool: {0}")]
-    InvalidBool(#[from] ParseBoolError),
+    Bool(#[from] ParseBoolError),
 }
 
 pub struct SafeMap<T, U>(Arc<Mutex<HashMap<T, U>>>);
@@ -63,21 +64,19 @@ pub struct Program {
     pub float_moved: bool,
 }
 
-impl ToString for Program {
-    fn to_string(&self) -> String {
-        let mut buf = String::new();
-        buf.push_str(&format!("{}:[", self.class));
+impl Display for Program {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:[", self.class)?;
         for (i, workspace) in self.workspaces.iter().enumerate() {
-            buf.push_str(&workspace.to_string());
+            write!(f, "{}", workspace)?;
             if i != self.workspaces.len() - 1 {
-                buf.push(',');
+                write!(f, ",")?;
             }
         }
         match &self.floating_window {
-            Some(window) => buf.push_str(&format!("]&[{}]", window.to_string())),
-            None => buf.push_str("]&[]"),
+            Some(floating_window) => write!(f, "]&[{}]", floating_window),
+            None => write!(f, "]&[]"),
         }
-        buf
     }
 }
 
@@ -93,31 +92,24 @@ impl FromStr for Program {
             .first()
             .unwrap_or(&"0")
             .trim()
-            .trim_matches(&['[', ']'])
+            .trim_matches(['[', ']'])
             .split(',')
             .collect();
 
-        let mut workspaces: Vec<Workspace> = Vec::new();
-        workspaces.reserve(workspaces_str.len());
+        let mut workspaces: Vec<Workspace> = Vec::with_capacity(workspaces_str.len());
         for workspace_str in workspaces_str.iter() {
-            let workspace = match Workspace::from_str(&workspace_str) {
-                Ok(val) => val,
-                Err(err) => return Err(err),
-            };
+            let workspace = Workspace::from_str(workspace_str)?;
             workspaces.push(workspace);
         }
 
-        let window_str = data.last().unwrap_or(&"0").trim().trim_matches(&['[', ']']);
+        let window_str = data.last().unwrap_or(&"0").trim().trim_matches(['[', ']']);
 
-        let window = match FloatingWindow::from_str(window_str) {
-            Ok(window) => Some(window),
-            Err(_) => None,
-        };
+        let floating_window = FloatingWindow::from_str(window_str).ok();
 
         Ok(Program {
             class: class.to_string(),
-            workspaces: workspaces,
-            floating_window: window,
+            workspaces,
+            floating_window,
             moved: false,
             float_moved: false,
         })
@@ -130,9 +122,9 @@ pub struct Workspace {
     pub timestamp: i64,
 }
 
-impl ToString for Workspace {
-    fn to_string(&self) -> String {
-        format!("{};{}", self.workspace_id, self.timestamp)
+impl Display for Workspace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{};{}", self.workspace_id, self.timestamp)
     }
 }
 
@@ -152,8 +144,8 @@ impl FromStr for Workspace {
         let timestamp: i64 = parts[1].parse()?;
 
         Ok(Workspace {
-            workspace_id: workspace_id,
-            timestamp: timestamp,
+            workspace_id,
+            timestamp,
         })
     }
 }
@@ -164,9 +156,10 @@ pub struct FloatingWindow {
     pub size: (i16, i16),
 }
 
-impl ToString for FloatingWindow {
-    fn to_string(&self) -> String {
-        format!(
+impl Display for FloatingWindow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
             "{};{};{};{}",
             self.at.0, self.at.1, self.size.0, self.size.1
         )
@@ -222,28 +215,27 @@ pub struct State {
     pub changed: Arc<AtomicBool>,
 }
 
+pub type WorkspaceConfig = (Arc<[String]>, FilterMode, usize);
+pub type FloatingConfig = (Arc<[String]>, FilterMode);
+pub type RestoreConfig = (Arc<[String]>, FilterMode, i64);
+
 impl State {
     pub fn new(
-        workspace_buffer: usize,
-        workspace_list: Arc<[String]>,
-        workspace_mode: FilterMode,
-        floating_list: Arc<[String]>,
-        floating_mode: FilterMode,
-        restore_list: Arc<[String]>,
-        restore_mode: FilterMode,
-        restore_timeout: i64,
+        workspace_config: WorkspaceConfig,
+        floating_config: FloatingConfig,
+        restore_config: RestoreConfig,
     ) -> Self {
         Self {
             addresses: SafeMap::new(),
             programs: SafeMap::new(),
-            workspace_list: workspace_list,
-            workspace_mode: workspace_mode,
-            workspace_buffer: workspace_buffer,
-            floating_list: floating_list,
-            floating_mode: floating_mode,
-            restore_list: restore_list,
-            restore_mode: restore_mode,
-            restore_timeout: restore_timeout,
+            workspace_list: workspace_config.0,
+            workspace_mode: workspace_config.1,
+            workspace_buffer: workspace_config.2,
+            floating_list: floating_config.0,
+            floating_mode: floating_config.1,
+            restore_list: restore_config.0,
+            restore_mode: restore_config.1,
+            restore_timeout: restore_config.2,
             current_workspace: Arc::new(AtomicI32::new(1)),
             changed: Arc::new(AtomicBool::new(false)),
         }
@@ -251,14 +243,20 @@ impl State {
 
     pub async fn load(programs: Vec<Program>, config: Config) -> Self {
         let state = Self::new(
-            config.workspace.buffer,
-            config.workspace.filter.programs.into(),
-            config.workspace.filter.mode,
-            config.floating.filter.programs.into(),
-            config.floating.filter.mode,
-            config.restore.filter.programs.into(),
-            config.restore.filter.mode,
-            config.restore.timeout,
+            (
+                config.workspace.filter.programs.into(),
+                config.workspace.filter.mode,
+                config.workspace.buffer,
+            ),
+            (
+                config.floating.filter.programs.into(),
+                config.floating.filter.mode,
+            ),
+            (
+                config.restore.filter.programs.into(),
+                config.restore.filter.mode,
+                config.restore.timeout,
+            ),
         );
         let mut programs_map = state.programs.0.lock().await;
         for program in programs {
@@ -272,12 +270,10 @@ impl State {
             // Creates new program if none exists
             let mut programs = self.programs.0.lock().await;
             if !programs.contains_key(&class) {
-                let mut positions: Vec<Workspace> = Vec::new();
-                // If this is the first time we are opening a window we should store that
-                positions.push(Workspace {
+                let positions = vec![Workspace {
                     workspace_id: self.current_workspace.load(Ordering::Relaxed),
                     timestamp: Utc::now().timestamp(),
-                });
+                }];
                 let _ = programs.insert(
                     class.clone(),
                     Program {
@@ -352,7 +348,7 @@ impl State {
         }
 
         let position = Workspace {
-            workspace_id: workspace_id,
+            workspace_id,
             timestamp: Utc::now().timestamp(),
         };
         program.workspaces.push(position);
