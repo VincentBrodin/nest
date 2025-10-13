@@ -8,7 +8,7 @@ use std::{
     },
 };
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use hyprland::{
     dispatch::{Dispatch, DispatchType, WindowIdentifier, WorkspaceIdentifierWithSpecial},
     error::HyprError,
@@ -58,7 +58,7 @@ impl<T, U> Clone for SafeMap<T, U> {
 pub struct Program {
     pub class: String,
     pub workspaces: Vec<Workspace>,
-    pub floating_window: Option<Window>,
+    pub floating_window: Option<FloatingWindow>,
     pub moved: bool,
     pub float_moved: bool,
 }
@@ -109,7 +109,7 @@ impl FromStr for Program {
 
         let window_str = data.last().unwrap_or(&"0").trim().trim_matches(&['[', ']']);
 
-        let window = match Window::from_str(window_str) {
+        let window = match FloatingWindow::from_str(window_str) {
             Ok(window) => Some(window),
             Err(_) => None,
         };
@@ -159,12 +159,12 @@ impl FromStr for Workspace {
 }
 
 #[derive(Clone, Debug)]
-pub struct Window {
+pub struct FloatingWindow {
     pub at: (i16, i16),
     pub size: (i16, i16),
 }
 
-impl ToString for Window {
+impl ToString for FloatingWindow {
     fn to_string(&self) -> String {
         format!(
             "{};{};{};{}",
@@ -173,7 +173,7 @@ impl ToString for Window {
     }
 }
 
-impl FromStr for Window {
+impl FromStr for FloatingWindow {
     type Err = ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -192,16 +192,23 @@ impl FromStr for Window {
         let size_x: i16 = parts[2].parse()?;
         let size_y: i16 = parts[3].parse()?;
 
-        Ok(Window {
+        Ok(FloatingWindow {
             at: (at_x, at_y),
             size: (size_x, size_y),
         })
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct Window {
+    pub class: String,
+    pub timestamp: DateTime<Utc>,
+    pub origin: i32,
+}
+
 #[derive(Clone)]
 pub struct State {
-    addresses: SafeMap<Address, String>,
+    addresses: SafeMap<Address, Window>,
     programs: SafeMap<String, Program>,
     current_workspace: Arc<AtomicI32>,
     workspace_list: Arc<[String]>,
@@ -209,6 +216,9 @@ pub struct State {
     workspace_buffer: usize,
     floating_list: Arc<[String]>,
     floating_mode: FilterMode,
+    restore_list: Arc<[String]>,
+    restore_mode: FilterMode,
+    restore_timeout: i64,
     pub changed: Arc<AtomicBool>,
 }
 
@@ -219,6 +229,9 @@ impl State {
         workspace_mode: FilterMode,
         floating_list: Arc<[String]>,
         floating_mode: FilterMode,
+        restore_list: Arc<[String]>,
+        restore_mode: FilterMode,
+        restore_timeout: i64,
     ) -> Self {
         Self {
             addresses: SafeMap::new(),
@@ -228,6 +241,9 @@ impl State {
             workspace_buffer: workspace_buffer,
             floating_list: floating_list,
             floating_mode: floating_mode,
+            restore_list: restore_list,
+            restore_mode: restore_mode,
+            restore_timeout: restore_timeout,
             current_workspace: Arc::new(AtomicI32::new(1)),
             changed: Arc::new(AtomicBool::new(false)),
         }
@@ -240,6 +256,9 @@ impl State {
             config.workspace.filter.mode,
             config.floating.filter.programs.into(),
             config.floating.filter.mode,
+            config.restore.filter.programs.into(),
+            config.restore.filter.mode,
+            config.restore.timeout,
         );
         let mut programs_map = state.programs.0.lock().await;
         for program in programs {
@@ -273,23 +292,44 @@ impl State {
         }
         {
             // Maps the address to the program
+            let window = Window {
+                class: class.clone(),
+                timestamp: Utc::now(),
+                origin: self.current_workspace(),
+            };
             let mut addresses = self.addresses.0.lock().await;
-            addresses.insert(address.clone(), class.clone());
+            addresses.insert(address.clone(), window);
         }
         debug!("Window {address} of type {class} added");
     }
 
     // Removes mapping between window and program, it will never remove a programs state
-    pub async fn remove_window(&self, address: Address) {
+    pub async fn remove_window(&self, address: Address) -> Result<(), Error> {
         let mut addresses = self.addresses.0.lock().await;
-        if let Some(class) = addresses.remove(&address) {
-            debug!("Window {address} of type {class} removed")
+        if let Some(window) = addresses.remove(&address) {
+            let diff = Utc::now() - window.timestamp;
+            let is_in_list = self.restore_list.contains(&window.class);
+            if self.restore_timeout >= diff.num_seconds()
+                && ((is_in_list && self.restore_mode == FilterMode::Include)
+                    || (!is_in_list && self.restore_mode == FilterMode::Exclude))
+            {
+                Dispatch::call_async(DispatchType::Workspace(WorkspaceIdentifierWithSpecial::Id(
+                    window.origin,
+                )))
+                .await?;
+            }
+            debug!(
+                "Window {address} of type {} removed after {}s",
+                window.class,
+                diff.num_seconds()
+            );
         }
+        Ok(())
     }
 
     pub async fn window_moved(&self, address: Address, workspace_id: i32) -> Result<(), Error> {
         let addresses = self.addresses.0.lock().await;
-        let class = match addresses.get(&address) {
+        let window = match addresses.get(&address) {
             Some(val) => val,
             None => {
                 return Err(Error::BlankAddress);
@@ -297,7 +337,7 @@ impl State {
         };
 
         let mut programs = self.programs.0.lock().await;
-        let program = match programs.get_mut(class) {
+        let program = match programs.get_mut(&window.class) {
             Some(val) => val,
             None => {
                 return Err(Error::BlankClass);
@@ -322,7 +362,10 @@ impl State {
         }
 
         self.changed.store(true, Ordering::Relaxed);
-        info!("Program of type {class} got moved to workspace {workspace_id}");
+        info!(
+            "Program of type {} got moved to workspace {}",
+            window.class, workspace_id
+        );
 
         Ok(())
     }
@@ -331,19 +374,19 @@ impl State {
         let addresses = self.addresses.0.lock().await;
         let mut programs = self.programs.0.lock().await;
 
-        let class = match addresses.get(address) {
+        let window = match addresses.get(address) {
             Some(val) => val,
             None => return Err(Error::BlankAddress),
         };
 
-        let is_in_list = self.workspace_list.contains(class);
+        let is_in_list = self.workspace_list.contains(&window.class);
         if (!is_in_list && self.workspace_mode == FilterMode::Include)
             || (is_in_list && self.workspace_mode == FilterMode::Exclude)
         {
             return Ok(false);
         }
 
-        let program = match programs.get_mut(class) {
+        let program = match programs.get_mut(&window.class) {
             Some(val) => val,
             None => return Err(Error::BlankClass),
         };
@@ -365,7 +408,11 @@ impl State {
         }
     }
 
-    pub async fn add_floating_window(&self, class: &str, window: Window) -> Result<(), Error> {
+    pub async fn add_floating_window(
+        &self,
+        class: &str,
+        window: FloatingWindow,
+    ) -> Result<(), Error> {
         let mut programs = self.programs.0.lock().await;
 
         let program = match programs.get_mut(class) {
@@ -408,19 +455,19 @@ impl State {
         let addresses = self.addresses.0.lock().await;
         let mut programs = self.programs.0.lock().await;
 
-        let class = match addresses.get(address) {
+        let window = match addresses.get(address) {
             Some(val) => val,
             None => return Err(Error::BlankAddress),
         };
 
-        let is_in_list = self.floating_list.contains(class);
+        let is_in_list = self.floating_list.contains(&window.class);
         if (!is_in_list && self.floating_mode == FilterMode::Include)
             || (is_in_list && self.floating_mode == FilterMode::Exclude)
         {
             return Ok(false);
         }
 
-        let program = match programs.get_mut(class) {
+        let program = match programs.get_mut(&window.class) {
             Some(val) => val,
             None => return Err(Error::BlankClass),
         };

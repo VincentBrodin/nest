@@ -18,7 +18,7 @@ use tokio::time::sleep;
 use crate::{
     config::Config,
     logger::setup_logger,
-    state::{State, Window, Workspace},
+    state::{FloatingWindow, State, Workspace},
     storage::Storage,
 };
 mod config;
@@ -161,7 +161,14 @@ async fn main() -> Result<(), Error> {
     let remove_state = state.clone();
     event_listener.add_window_closed_handler(move |address| {
         let state = remove_state.clone();
-        Box::pin(async move { state.remove_window(address).await })
+        Box::pin(async move {
+            match state.remove_window(address).await {
+                Ok(_) => (),
+                Err(err) => error!(
+                    "Something went wrong trying to restore state after closing a window {err}"
+                ),
+            }
+        })
     });
 
     let move_state = state.clone();
@@ -200,7 +207,7 @@ async fn main() -> Result<(), Error> {
                     match state
                         .add_floating_window(
                             &client.class,
-                            Window {
+                            FloatingWindow {
                                 at: client.at,
                                 size: client.size,
                             },
