@@ -26,7 +26,7 @@ pub fn setup_logger(app_name: &str, file_name: &str, log_level: LevelFilter) -> 
         .format(|out, message, record| {
             out.finish(format_args!(
                 "[{} {} {}] {}",
-                chrono::Local::now().to_string(),
+                chrono::Local::now(),
                 record.level(),
                 record.target(),
                 message
