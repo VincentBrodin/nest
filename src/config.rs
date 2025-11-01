@@ -23,6 +23,7 @@ pub enum Error {
 pub struct Config {
     pub workspace: WorkspaceConfig,
     pub floating: FloatingConfig,
+    pub restore: RestoreConfig,
     pub save_frequency: u64,
     pub log_level: String,
 }
@@ -38,6 +39,12 @@ pub struct WorkspaceConfig {
 pub struct FloatingConfig {
     pub filter: ProgramFilter,
     pub frequency: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RestoreConfig {
+    pub filter: ProgramFilter,
+    pub timeout: i64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -95,6 +102,13 @@ impl Default for Config {
                     programs: Vec::new(),
                 },
                 frequency: 5,
+            },
+            restore: RestoreConfig {
+                filter: ProgramFilter {
+                    mode: FilterMode::Include,
+                    programs: Vec::new(),
+                },
+                timeout: 120,
             },
             save_frequency: 10,
             log_level: log::LevelFilter::Info.as_str().to_string(),

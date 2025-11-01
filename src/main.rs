@@ -18,7 +18,7 @@ use tokio::time::sleep;
 use crate::{
     config::Config,
     logger::setup_logger,
-    state::{State, Window, Workspace},
+    state::{FloatingWindow, State, Workspace},
     storage::Storage,
 };
 mod config;
@@ -64,7 +64,7 @@ async fn main() -> Result<(), Error> {
     let log_level = match LevelFilter::from_str(&config.log_level) {
         Ok(val) => val,
         Err(err) => {
-            print!("Failed to set log level: {}\n", err,);
+            error!("Failed to set log level: {err} defualting to ERROR");
             LevelFilter::Error
         }
     };
@@ -161,7 +161,14 @@ async fn main() -> Result<(), Error> {
     let remove_state = state.clone();
     event_listener.add_window_closed_handler(move |address| {
         let state = remove_state.clone();
-        Box::pin(async move { state.remove_window(address).await })
+        Box::pin(async move {
+            match state.remove_window(address).await {
+                Ok(_) => (),
+                Err(err) => error!(
+                    "Something went wrong trying to restore state after closing a window {err}"
+                ),
+            }
+        })
     });
 
     let move_state = state.clone();
@@ -200,7 +207,7 @@ async fn main() -> Result<(), Error> {
                     match state
                         .add_floating_window(
                             &client.class,
-                            Window {
+                            FloatingWindow {
                                 at: client.at,
                                 size: client.size,
                             },
@@ -262,16 +269,16 @@ fn calculate_workspace(workspaces: Vec<Workspace>, tau: f64) -> Option<i32> {
         };
     }
 
-    match score_map.iter().max_by(|a, b| {
-        if a.1 > b.1 {
-            cmp::Ordering::Greater
-        } else if a.1 < b.1 {
-            cmp::Ordering::Less
-        } else {
-            cmp::Ordering::Equal
-        }
-    }) {
-        Some(val) => Some(*val.0),
-        None => None,
-    }
+    score_map
+        .iter()
+        .max_by(|a, b| {
+            if a.1 > b.1 {
+                cmp::Ordering::Greater
+            } else if a.1 < b.1 {
+                cmp::Ordering::Less
+            } else {
+                cmp::Ordering::Equal
+            }
+        })
+        .map(|val| *val.0)
 }
