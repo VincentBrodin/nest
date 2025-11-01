@@ -90,4 +90,11 @@ frequency = 5 # How often nest will look for new floating windows
 [floating.filter]
 mode = "Include" # Include, Exclude
 programs = [] # List of program classes you wish to either include or exclude
+
+[restore]
+timeout = 120 # If a program closes before this timeout, you'll be returned to your previous workspace.
+
+[restore.filter]
+mode = "Include" # Include, Exclude
+programs = [] # List of program classes you wish to either include or exclude
 ```
