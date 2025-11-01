@@ -1,25 +1,36 @@
-use std::{
-    collections::HashMap,
-    fmt::Display,
-    num::ParseIntError,
-    str::{FromStr, ParseBoolError},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicI32, Ordering},
-    },
-};
-
-use chrono::{DateTime, Utc};
+use crate::config::{Config, FilterMode};
+use chrono::Utc;
 use hyprland::{
     dispatch::{Dispatch, DispatchType, WindowIdentifier, WorkspaceIdentifierWithSpecial},
     error::HyprError,
     shared::Address,
 };
 use log::{debug, info};
+use std::{
+    collections::HashMap,
+    num::ParseIntError,
+    str::ParseBoolError,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicI32, Ordering},
+    },
+};
 use thiserror::Error;
-use tokio::sync::Mutex;
 
-use crate::config::{Config, FilterMode};
+mod safemap;
+pub use safemap::SafeMap;
+
+mod program;
+pub use program::Program;
+
+mod window;
+pub use window::Window;
+
+mod workspace;
+pub use workspace::Workspace;
+
+mod floatingwindow;
+pub use floatingwindow::FloatingWindow;
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -39,164 +50,6 @@ pub enum ParseError {
     Int(#[from] ParseIntError),
     #[error("could parse bool: {0}")]
     Bool(#[from] ParseBoolError),
-}
-
-pub struct SafeMap<T, U>(Arc<Mutex<HashMap<T, U>>>);
-
-impl<T, U> SafeMap<T, U> {
-    fn new() -> Self {
-        SafeMap(Arc::new(Mutex::new(HashMap::new())))
-    }
-}
-
-impl<T, U> Clone for SafeMap<T, U> {
-    fn clone(&self) -> Self {
-        SafeMap(self.0.clone())
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct Program {
-    pub class: String,
-    pub workspaces: Vec<Workspace>,
-    pub floating_window: Option<FloatingWindow>,
-    pub moved: bool,
-    pub float_moved: bool,
-}
-
-impl Display for Program {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}:[", self.class)?;
-        for (i, workspace) in self.workspaces.iter().enumerate() {
-            write!(f, "{}", workspace)?;
-            if i != self.workspaces.len() - 1 {
-                write!(f, ",")?;
-            }
-        }
-        match &self.floating_window {
-            Some(floating_window) => write!(f, "]&[{}]", floating_window),
-            None => write!(f, "]&[]"),
-        }
-    }
-}
-
-impl FromStr for Program {
-    type Err = ParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let split: Vec<&str> = s.split(':').collect();
-        let class = split.first().unwrap_or(&"0");
-        let data: Vec<&str> = split.last().unwrap_or(&"0").split('&').collect();
-
-        let workspaces_str: Vec<&str> = data
-            .first()
-            .unwrap_or(&"0")
-            .trim()
-            .trim_matches(['[', ']'])
-            .split(',')
-            .collect();
-
-        let mut workspaces: Vec<Workspace> = Vec::with_capacity(workspaces_str.len());
-        for workspace_str in workspaces_str.iter() {
-            let workspace = Workspace::from_str(workspace_str)?;
-            workspaces.push(workspace);
-        }
-
-        let window_str = data.last().unwrap_or(&"0").trim().trim_matches(['[', ']']);
-
-        let floating_window = FloatingWindow::from_str(window_str).ok();
-
-        Ok(Program {
-            class: class.to_string(),
-            workspaces,
-            floating_window,
-            moved: false,
-            float_moved: false,
-        })
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct Workspace {
-    pub workspace_id: i32,
-    pub timestamp: i64,
-}
-
-impl Display for Workspace {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{};{}", self.workspace_id, self.timestamp)
-    }
-}
-
-impl FromStr for Workspace {
-    type Err = ParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.is_empty() {
-            return Err(ParseError::InvalidFormat);
-        }
-        let parts: Vec<&str> = s.split(";").collect();
-        if parts.len() != 2 {
-            return Err(ParseError::InvalidFormat);
-        }
-
-        let workspace_id: i32 = parts[0].parse()?;
-        let timestamp: i64 = parts[1].parse()?;
-
-        Ok(Workspace {
-            workspace_id,
-            timestamp,
-        })
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct FloatingWindow {
-    pub at: (i16, i16),
-    pub size: (i16, i16),
-}
-
-impl Display for FloatingWindow {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{};{};{};{}",
-            self.at.0, self.at.1, self.size.0, self.size.1
-        )
-    }
-}
-
-impl FromStr for FloatingWindow {
-    type Err = ParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.is_empty() {
-            return Err(ParseError::InvalidFormat);
-        }
-        let parts: Vec<&str> = s.split(";").collect();
-        if parts.len() != 4 {
-            // Return a ParseIntError by attempting a dummy parse
-            // because ParseIntError has no public constructor.
-            return Err(ParseError::InvalidFormat);
-        }
-
-        let at_x: i16 = parts[0].parse()?;
-        let at_y: i16 = parts[1].parse()?;
-        let size_x: i16 = parts[2].parse()?;
-        let size_y: i16 = parts[3].parse()?;
-
-        Ok(FloatingWindow {
-            at: (at_x, at_y),
-            size: (size_x, size_y),
-        })
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct Window {
-    pub class: String,
-    pub timestamp: DateTime<Utc>,
-    pub origin: i32,
 }
 
 #[derive(Clone)]
