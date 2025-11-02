@@ -45,4 +45,4 @@ cargo fmt
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-If you open a pull request, target the main branch and describe the change briefly.
+If you open a pull request, target the development branch and describe the change briefly.
