@@ -1,6 +1,7 @@
 <p align="center" style="margin-bottom: 0px !important;">
   <img width="200" src="./assets/nest_logo.png" alt="nest logo" align="center">
 </p>
+
 **Your windows always find their way home.**
 nest is an intelligent window placement system for [Hyprland](https://github.com/hyprwm/Hyprland).
 It learns where you like your apps to live and ensures they always open in the right workspace, no hunting, no dragging, no friction.
