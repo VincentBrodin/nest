@@ -1,4 +1,4 @@
-# nest
+![logo](./assets/nest_logo.png)
 
 **Your windows always find their way home.**
 nest is an intelligent window placement system for [Hyprland](https://github.com/hyprwm/Hyprland).
