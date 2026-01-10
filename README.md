@@ -44,7 +44,7 @@ cargo install hypr-nest
 ### From Source
 
 ```bash
-git clone https://github.com/VincentBrodin/nest.git 
+git clone https://github.com/vincbro/nest.git 
 cd nest
 cargo build --release
 ```

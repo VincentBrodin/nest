@@ -8,7 +8,7 @@ Here’s how how you can set it up for development.
 Clone the repository:
 
 ```bash
-git clone https://github.com/VincentBrodin/nest.git
+git clone https://github.com/vincbro/nest.git
 cd nest
 ```
 
